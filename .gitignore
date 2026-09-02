@@ -3,3 +3,6 @@ main.js
 *.js.map
 eslint.config.mjs
 node_modules
+.test-dist/
+dist/
+test-vault/

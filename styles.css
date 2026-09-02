@@ -1,4 +1,4 @@
-/* Flomo Sync Plugin Styles */
+/* Flomo Safe Sync Plugin Styles */
 .flomo-sync-status {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
@@ -11,4 +11,9 @@
 
 .flomo-sync-status.error {
   color: var(--text-error);
+}
+
+.flomo-safe-sync-settings textarea {
+  min-height: 7rem;
+  width: 100%;
 }

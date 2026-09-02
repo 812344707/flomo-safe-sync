@@ -1,115 +1,159 @@
-# Flomo Sync — Obsidian Plugin
+# Flomo Safe Sync
 
-Sync your [Flomo](https://flomoapp.com) memos to Obsidian. Auto-login, tag-based folders, incremental updates.
+一个强调“本地内容不丢失”的 Flomo → Obsidian 桌面插件，基于
+[Watermelon4000/flomo-obsidian-sync](https://github.com/Watermelon4000/flomo-obsidian-sync)
+修改。
 
-## Features
+## 与原版相比
 
-- **One-click login**: Log in to Flomo directly from Obsidian — no manual token copying
-- **Full sync**: Fetches all your Flomo memos and converts them to Markdown
-- **Tag-based folders**: Memos are organized into folders matching your Flomo tag hierarchy
-- **Incremental updates**: Detects new, updated, and deleted memos
-- **Auto sync**: Optional sync on startup + configurable interval
-- **HTML → Markdown**: Converts rich text (bold, italic, highlights, blockquotes, lists, images) to clean Markdown
-- **Frontmatter**: Each memo includes YAML frontmatter with date, slug, source, and tags
+- 只更新明确标记的 Flomo 受管区，保留受管区之外的手工内容。
+- Flomo 删除 memo 后，Obsidian 文件和附件继续保留，仅标记
+  `flomo_status: deleted`。
+- 默认保存根目录可自定义。
+- 文件名模板可自定义。
+- 可为新笔记设置额外的 YAML 字段模板。
+- Flomo 标签与 Obsidian 手工标签统一合并到标准 `tags` 字段。
+- 可设置“Flomo 标签 → Vault 文件夹”的有序映射。
+- 可按完整 Flomo 标签排除更新，并选择“首次导入后冻结”或“完全跳过”。
+- 可把 Flomo 图片下载到 Vault 内，远程下载失败时保留原链接。
+- 路径冲突时自动追加短 slug，不覆盖已有文件。
 
-## How It Works
+## 受管区
 
-```
-Flomo → Login → Fetch all memos → Convert HTML to Markdown → Write to vault
-                                                                ↓
-                                                        flomo/
-                                                        ├── project/content/
-                                                        │   └── 2026-05-01_07-59-23.md
-                                                        ├── story/dairy/
-                                                        │   └── 2026-04-30_23-15-52.md
-                                                        └── _untagged/
-                                                            └── ...
-```
-
-Each memo becomes a Markdown file named by its creation timestamp. Files are organized into folders based on your Flomo tags. A memo with multiple tags is copied to all matching folders.
-
-## Installation
-
-### From Community Plugins (coming soon)
-
-1. Open Settings → Community Plugins → Browse
-2. Search for "Flomo Sync"
-3. Install and enable
-
-### Manual Install
-
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](../../releases/latest)
-2. Create a folder `flomo-sync` inside your vault's `.obsidian/plugins/` directory
-3. Copy the three files into that folder
-4. Restart Obsidian and enable the plugin in Settings → Community Plugins
-
-### Build from Source
-
-```bash
-git clone https://github.com/Watermelon4000/flomo-obsidian-sync.git
-cd flomo-obsidian-sync
-npm install
-npm run build
-```
-
-Then copy `main.js`, `manifest.json`, and `styles.css` to your vault's `.obsidian/plugins/flomo-sync/` directory.
-
-## Setup
-
-1. Open plugin settings
-2. Click **🔑 Login with Flomo**
-3. Log in to your Flomo account in the popup window
-4. Token is captured automatically — done!
-
-> **Note**: The token may expire periodically. If sync stops working, click Login again.
-
-## Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Flomo Folder | `flomo` | Root folder in your vault for synced memos |
-| Sync on Startup | Off | Auto-sync when Obsidian opens |
-| Sync Interval | 60 min | How often to auto-sync (0 = disabled) |
-
-## Commands
-
-- **Sync Flomo Now** — Trigger a manual sync
-- **Reset Flomo Sync History & Re-sync All** — Clear sync records and do a fresh full import
-
-You can also click the 🔄 ribbon icon to sync.
-
-## Output Format
-
-Each memo is saved as a Markdown file with frontmatter:
+新笔记大致如下：
 
 ```markdown
 ---
-date: 2026-05-01 07:59:23
-slug: MjM0NDE0NzA4
-source: flomo
+# flomo-sync:frontmatter:start
+flomo_slug: "abcdef123456"
+flomo_status: active
+flomo_sync_policy: managed
+flomo_created_at: "2026-09-01 08:09:10"
+flomo_updated_at: "2026-09-01 08:09:10"
+flomo_last_synced_at: "2026-09-01T08:10:00.000Z"
+# flomo-sync:frontmatter:end
 tags:
-  - "project/content"
+  - "写作"
+  - "重点"
+source: flomo
+note_type: memo
 ---
 
-Your memo content here, converted from HTML to Markdown.
+<!-- flomo-sync:content:start -->
+这里由 Flomo 更新。
+<!-- flomo-sync:content:end -->
 
-#project/content
+## 我的补充
+
+这里可以长期添加批注、双链和加工内容，插件不会改写。
 ```
 
-## Disclosures
+如果受管区标记缺失或损坏，插件会停止覆盖该文件并报告冲突。
 
-> **Network access**: This plugin connects to `flomoapp.com` to fetch your memos. All data is stored locally in your Obsidian vault.
->
-> **Unofficial API**: This plugin uses Flomo's internal web API (the same endpoints used by the Flomo web app). It is **not** an official Flomo integration and may break if Flomo changes their API. Use at your own discretion.
->
-> **Desktop only**: The auto-login feature requires Electron (Obsidian desktop). This plugin does not work on mobile.
->
-> **No tracking**: This plugin does not collect any analytics, telemetry, or personal data.
+`tags` 是唯一的标签属性。插件会记录上次真正写入笔记的 Flomo 标签，更新其中的
+Flomo 部分，同时保留你在 Obsidian 中手工添加的标签。旧版笔记中的 `flomo_tags`
+会在下次受管更新时自动并入 `tags`。
 
-## Feedback
+## 保存位置和文件名
 
-Questions, bugs, or feature requests? Reach out at **hello@delicatewatermelon.com**
+默认根目录必须是 Vault 内相对路径，例如：
 
-## License
+```text
+00-Flomo收件箱
+```
 
-MIT © [Zihong Chen](https://delicatewatermelon.com)
+文件名模板支持：
+
+- `{{date}}`：创建日期，例如 `2026-09-01`
+- `{{time}}`：创建时间，例如 `08-09-10`
+- `{{title}}`、`{{title:20}}`：正文首行或限定长度
+- `{{slug}}`、`{{slug:8}}`：Flomo slug 或限定长度
+- `{{first_tag}}`：第一个 Flomo 标签
+
+默认模板：
+
+```text
+{{date}}_{{time}}_{{title:20}}_{{slug:8}}
+```
+
+设置变化只影响新导入的 memo，不会静默移动或重命名已有笔记。
+
+## YAML 字段模板
+
+设置页可为首次导入的新笔记填写额外 YAML 字段，每行一个顶层字段：
+
+```yaml
+source: flomo
+note_type: memo
+created: "{{date}}"
+aliases: []
+```
+
+模板支持与文件名相同的 `{{date}}`、`{{time}}`、`{{title}}`、`{{slug}}`、
+`{{first_tag}}` 变量。模板只用于首次创建，不会批量改写现有笔记；`tags` 和
+所有 `flomo_` 字段由插件维护，不能在模板中重复定义。
+
+## 标签 → 文件夹
+
+设置页中每行写一条映射：
+
+```text
+写作 = 20-写作素材
+医学/论文 = 30-医学研究
+```
+
+规则：
+
+1. 排除更新的标签优先。
+2. 多标签 memo 命中多个文件夹映射时，列表中最靠前的一条优先。
+3. 命中文件夹映射后只保存一份，不再复制到其他标签目录。
+4. 未命中映射时使用默认根目录和“未映射标签的目录方式”。
+5. 第一版按完整标签名精确匹配。
+
+## 排除更新
+
+- `首次导入后冻结`：第一次创建 Obsidian 笔记，以后不再更新受管区。
+- `完全不导入，也不更新`：新 memo 不创建文件；已经存在的文件原地保留。
+- 多标签 memo 命中任意一个排除标签，即进入排除规则。
+- 排除标签从 Flomo memo 上移除后，下次同步恢复受管区更新。
+
+## 安装
+
+### 构建
+
+```bash
+npm install
+npm run check
+npm run package
+```
+
+构建后的安装目录位于 `dist/flomo-safe-sync`，同时会生成 `dist/flomo-safe-sync-0.1.0.zip`。将整个目录复制到 Vault：
+
+```text
+<Vault>/.obsidian/plugins/flomo-safe-sync/
+├── main.js
+├── manifest.json
+└── styles.css
+```
+
+重新加载 Obsidian 后，在“设置 → 第三方插件”中启用 **Flomo Safe Sync**。
+
+## 注意事项
+
+- 插件使用 Flomo 网页端内部 API，不是 Flomo 官方集成；接口变化可能导致同步失效。
+- 自动登录依赖 Electron，因此插件仅支持 Obsidian 桌面版。
+- Flomo 登录令牌保存在本地 Obsidian 插件数据中，不会由本插件上传到其他服务。
+- 第一次用于真实 Vault 前，建议先使用测试 Vault 验证目录、命名和标签规则。
+
+## 开发
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+## 许可与致谢
+
+本项目保留上游 MIT License。感谢原作者 Zihong Chen 提供登录、API 请求、增量记录和
+HTML → Markdown 的基础实现。
