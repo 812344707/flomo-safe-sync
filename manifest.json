@@ -1,7 +1,7 @@
 {
   "id": "flomo-safe-sync",
   "name": "Flomo Safe Sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.2.3",
   "description": "Safely sync Flomo memos with managed sections, custom paths, tag routing, and local retention.",
   "author": "Zihong Chen and contributors",

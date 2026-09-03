@@ -13,7 +13,6 @@ export interface FlomoMemo {
   files?: Array<{ url: string; name: string }>;
 }
 
-export type StorageMode = 'single' | 'first-tag' | 'all-tags';
 export type ExcludedPolicy = 'freeze' | 'skip';
 export type ManagedStatus = 'active' | 'deleted';
 export type ManagedSyncPolicy = 'managed' | 'excluded';
@@ -29,9 +28,7 @@ export interface TagFolderParseResult {
 }
 
 export interface PathSettings {
-  rootFolder: string;
   fileNameTemplate: string;
-  storageMode: StorageMode;
   tagFolderMappings: TagFolderMapping[];
 }
 
@@ -127,10 +124,6 @@ export function sanitizePathSegment(value: string): string {
     .trim() || 'untitled';
 }
 
-function sanitizeTagPath(tag: string): string {
-  return normalizeTag(tag).split('/').filter(Boolean).map(sanitizePathSegment).join('/') || '_untagged';
-}
-
 function joinVaultPath(...parts: string[]): string {
   return parts.filter(Boolean).join('/').replace(/\/{2,}/g, '/');
 }
@@ -202,10 +195,16 @@ function dateParts(createdAt: string): { date: string; time: string } {
   return { date: 'unknown-date', time: 'unknown-time' };
 }
 
+function compactDateTime(createdAt: string): string {
+  const { date, time } = dateParts(createdAt);
+  if (date === 'unknown-date' || time === 'unknown-time') return 'unknown-datetime';
+  return `${date}-${time.replace(/-/g, '')}`;
+}
+
 function validateTemplateVariables(template: string, label: string): string | null {
   const tokens = template.match(/{{[^}]+}}/g) || [];
   for (const token of tokens) {
-    if (!/^{{(?:date|time|first_tag|title(?::\d+)?|slug(?::\d+)?)}}$/.test(token)) {
+    if (!/^{{(?:date|time|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)}}$/.test(token)) {
       return `不支持的${label}变量：${token}`;
     }
   }
@@ -225,10 +224,11 @@ export function renderFileName(template: string, memo: FlomoMemo): string {
   const { date, time } = dateParts(memo.created_at);
   const title = memoTitle(memo);
   const firstTag = extractTags(memo)[0] || 'untagged';
-  const rendered = template.replace(/{{(date|time|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
+  const rendered = template.replace(/{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
     const values: Record<string, string> = {
       date,
       time,
+      'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
       first_tag: firstTag,
       title,
       slug: memo.slug,
@@ -272,12 +272,13 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
   const values: Record<string, string> = {
     date,
     time,
+    'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
     first_tag: extractTags(memo)[0] || 'untagged',
     title: memoTitle(memo),
     slug: memo.slug,
   };
   return template.trim().replace(
-    /{{(date|time|first_tag|title|slug)(?::(\d+))?}}/g,
+    /{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g,
     (_match, key: string, length: string) => {
       const raw = values[key] || '';
       const value = length ? raw.slice(0, Math.max(1, Number.parseInt(length, 10))) : raw;
@@ -287,27 +288,27 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
 }
 
 export function findTagFolderMapping(memo: FlomoMemo, mappings: TagFolderMapping[]): TagFolderMapping | null {
-  const tags = extractTags(memo);
+  return findTagFolderMappingForTags(extractTags(memo), mappings);
+}
+
+export function findTagFolderMappingForTags(tags: string[], mappings: TagFolderMapping[]): TagFolderMapping | null {
+  const normalizedTags = normalizeTagList(tags);
   for (const mapping of mappings) {
     const tag = normalizeTag(mapping.tag);
-    if (tag && tags.includes(tag)) return { tag, folder: normalizeVaultPath(mapping.folder) };
+    if (tag && normalizedTags.includes(tag)) return { tag, folder: normalizeVaultPath(mapping.folder) };
   }
   return null;
 }
 
+export function collectFlomoTags(memos: FlomoMemo[]): string[] {
+  return normalizeTagList(memos.flatMap(extractTags));
+}
+
 export function computeDesiredPaths(memo: FlomoMemo, settings: PathSettings): string[] {
-  const root = normalizeVaultPath(settings.rootFolder);
   const fileName = `${renderFileName(settings.fileNameTemplate, memo)}.md`;
-  const tags = extractTags(memo);
   const mapping = findTagFolderMapping(memo, settings.tagFolderMappings);
   if (mapping) return [joinVaultPath(mapping.folder, fileName)];
-
-  if (settings.storageMode === 'single') return [joinVaultPath(root, fileName)];
-  if (settings.storageMode === 'first-tag') {
-    return [joinVaultPath(root, tags.length > 0 ? sanitizeTagPath(tags[0]) : '_untagged', fileName)];
-  }
-  const targetTags = tags.length > 0 ? tags : ['_untagged'];
-  return [...new Set(targetTags.map(tag => joinVaultPath(root, sanitizeTagPath(tag), fileName)))];
+  return [];
 }
 
 function yamlString(value: string): string {

@@ -2,14 +2,19 @@ import { strict as assert } from 'assert';
 import {
   FlomoMemo,
   buildNewMemoFile,
+  collectFlomoTags,
   computeDesiredPaths,
   extractYamlTags,
+  findTagFolderMapping,
+  findTagFolderMappingForTags,
   hasManagedMarkers,
   mergeManagedMemo,
   memoMatchesExcludedTags,
   parseTagFolderMappings,
+  renderFileName,
   renderYamlTemplate,
   updateManagedStatus,
+  validateFileNameTemplate,
   validateVaultRelativePath,
   validateYamlTemplate,
 } from '../sync-core';
@@ -23,9 +28,7 @@ const original: FlomoMemo = {
 };
 
 const pathSettings = {
-  rootFolder: '00-Flomo收件箱',
   fileNameTemplate: '{{date}}_{{time}}_{{title:6}}_{{slug:4}}',
-  storageMode: 'all-tags' as const,
   tagFolderMappings: [
     { tag: '写作', folder: '20-写作素材' },
     { tag: '素材', folder: '30-素材库' },
@@ -34,6 +37,20 @@ const pathSettings = {
 
 const mappedPaths = computeDesiredPaths(original, pathSettings);
 assert.deepEqual(mappedPaths, ['20-写作素材/2026-09-01_08-09-10_第一条写作想_abcd.md']);
+
+assert.equal(validateFileNameTemplate('{{YYYY-MM-DD-HHmmss}}'), null);
+assert.equal(renderFileName('{{YYYY-MM-DD-HHmmss}}', original), '2026-09-01-080910');
+assert.match(validateFileNameTemplate('{{YYYYMMDD}}') || '', /不支持/);
+
+assert.deepEqual(collectFlomoTags([
+  original,
+  { ...original, slug: 'second', tags: [{ name: '#素材' }, { name: '六经' }] },
+]), ['写作', '素材', '六经']);
+assert.deepEqual(findTagFolderMapping(original, pathSettings.tagFolderMappings), {
+  tag: '写作',
+  folder: '20-写作素材',
+});
+assert.equal(findTagFolderMappingForTags(['未映射'], pathSettings.tagFolderMappings), null);
 
 assert.equal(memoMatchesExcludedTags(original, ['写作']), '写作');
 assert.equal(memoMatchesExcludedTags(original, ['写作/归档']), null);
@@ -64,8 +81,7 @@ const unmappedPaths = computeDesiredPaths(
   { ...original, tags: [{ name: '未映射' }, { name: '第二标签' }] },
   pathSettings,
 );
-assert.equal(unmappedPaths.length, 2);
-assert.match(unmappedPaths[0], /^00-Flomo收件箱\/未映射\//);
+assert.deepEqual(unmappedPaths, []);
 
 const created = buildNewMemoFile(original, {
   syncedAt: '2026-09-01T08:10:00.000Z',

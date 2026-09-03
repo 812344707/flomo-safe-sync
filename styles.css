@@ -17,3 +17,12 @@
   min-height: 7rem;
   width: 100%;
 }
+
+.flomo-safe-sync-settings .flomo-sync-wide-input {
+  min-width: 16rem;
+}
+
+.flomo-safe-sync-settings .flomo-sync-mapping-row .setting-item-control {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
