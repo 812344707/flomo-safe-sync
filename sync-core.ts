@@ -1,3 +1,5 @@
+import { parseYaml } from 'obsidian';
+
 export interface FlomoLinkedMemo {
   slug: string;
   content: string;
@@ -14,6 +16,7 @@ export interface FlomoMemo {
 }
 
 export type ExcludedPolicy = 'freeze' | 'skip';
+export type UpdateMode = 'both' | 'body' | 'properties' | 'new-only';
 export type ManagedStatus = 'active' | 'deleted';
 export type ManagedSyncPolicy = 'managed' | 'excluded';
 
@@ -30,9 +33,13 @@ export interface TagFolderParseResult {
 export interface PathSettings {
   fileNameTemplate: string;
   tagFolderMappings: TagFolderMapping[];
+  rootFolder?: string;
+  scopeMode?: 'include' | 'exclude';
+  scopeTags?: string[];
 }
 
 export interface ManagedRenderOptions {
+  updateMode?: UpdateMode;
   syncedAt: string;
   status?: ManagedStatus;
   syncPolicy?: ManagedSyncPolicy;
@@ -208,7 +215,8 @@ function validateTemplateVariables(template: string, label: string): string | nu
       return `不支持的${label}变量：${token}`;
     }
   }
-  if (template.includes('{{') && tokens.length === 0) return `${label}变量格式不完整`;
+  const remaining = template.replace(/{{[^}]+}}/g, '');
+  if (remaining.includes('{{') || remaining.includes('}}')) return `${label}变量格式不完整`;
   return null;
 }
 
@@ -241,6 +249,8 @@ export function renderFileName(template: string, memo: FlomoMemo): string {
 
 export function validateYamlTemplate(template: string): string | null {
   if (!template.trim()) return null;
+  const variableError = validateTemplateVariables(template, 'YAML 模板');
+  if (variableError) return variableError;
   const seenKeys = new Set<string>();
   const lines = template.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
@@ -251,7 +261,16 @@ export function validateYamlTemplate(template: string): string | null {
     if (/^\s/.test(line)) return `第 ${index + 1} 行只能填写顶层 YAML 字段`;
     const match = line.match(/^([^:]+):(.*)$/);
     if (!match) return `第 ${index + 1} 行应为：字段: 值`;
-    const key = match[1].trim();
+    if (match[1].includes('{{')) return `第 ${index + 1} 行的字段名不能使用变量`;
+    let parsed: Record<string, unknown>;
+    let validationToken = 'FLOMO_TEMPLATE_VALUE';
+    while (line.includes(validationToken)) validationToken += '_';
+    try {
+      parsed = parseYaml(line.replace(/{{[^}]+}}/g, validationToken));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length !== 1) throw new Error('需要一个顶层字段');
+    } catch (error) { return `第 ${index + 1} 行 YAML 无效：${(error as Error).message}`; }
+    const key = Object.keys(parsed)[0];
+    if (key.includes(validationToken)) return `第 ${index + 1} 行的字段名不能使用变量`;
     const normalizedKey = key.toLowerCase();
     if (!key) return `第 ${index + 1} 行缺少字段名`;
     if (normalizedKey === 'tags' || normalizedKey.startsWith('flomo_')) {
@@ -261,7 +280,7 @@ export function validateYamlTemplate(template: string): string | null {
     if (/^[|>]\s*$/.test(match[2].trim())) return `第 ${index + 1} 行暂不支持多行 YAML 值`;
     seenKeys.add(normalizedKey);
   }
-  return validateTemplateVariables(template, 'YAML 模板');
+  return null;
 }
 
 export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
@@ -277,14 +296,35 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
     title: memoTitle(memo),
     slug: memo.slug,
   };
-  return template.trim().replace(
-    /{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g,
-    (_match, key: string, length: string) => {
+  const rendered = template.trim().split(/\r?\n/).map(line => {
+    if (!line.includes('{{') || line.trim().startsWith('#')) return line;
+    const replacements: string[] = [];
+    let sentinel = 'FLOMO_TEMPLATE_SLOT_';
+    while (line.includes(sentinel)) sentinel += '_';
+    const skeleton = line.replace(/{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
       const raw = values[key] || '';
-      const value = length ? raw.slice(0, Math.max(1, Number.parseInt(length, 10))) : raw;
-      return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ');
-    },
-  );
+      replacements.push(length ? raw.slice(0, Math.max(1, Number.parseInt(length, 10))) : raw);
+      return `${sentinel}${replacements.length - 1}_END`;
+    });
+    const parsed = parseYaml(skeleton) as Record<string, unknown>;
+    const substitute = (value: unknown): unknown => {
+      if (typeof value === 'string') return value.replace(new RegExp(`${sentinel}(\\d+)_END`, 'g'), (_m, index: string) => replacements[Number(index)]);
+      if (Array.isArray(value)) return value.map(substitute);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, substitute(val)]));
+      return value;
+    };
+    const key = Object.keys(parsed)[0];
+    const renderedKey = /^[A-Za-z0-9_\u4e00-\u9fff-]+$/.test(key) ? key : JSON.stringify(key);
+    return `${renderedKey}: ${JSON.stringify(substitute(parsed[key]))}`;
+  }).join('\n');
+  parseYaml(rendered);
+  return rendered;
+}
+
+export function tagsInScope(tags: string[], settings: Pick<PathSettings, 'scopeMode' | 'scopeTags' | 'tagFolderMappings'>): boolean {
+  const selected = new Set(normalizeTagList(settings.scopeTags ?? settings.tagFolderMappings.map(m => m.tag)));
+  const matched = normalizeTagList(tags).some(tag => selected.has(tag));
+  return settings.scopeMode === 'exclude' ? !matched : matched;
 }
 
 export function findTagFolderMapping(memo: FlomoMemo, mappings: TagFolderMapping[]): TagFolderMapping | null {
@@ -305,10 +345,11 @@ export function collectFlomoTags(memos: FlomoMemo[]): string[] {
 }
 
 export function computeDesiredPaths(memo: FlomoMemo, settings: PathSettings): string[] {
+  if (!tagsInScope(extractTags(memo), settings)) return [];
   const fileName = `${renderFileName(settings.fileNameTemplate, memo)}.md`;
   const mapping = findTagFolderMapping(memo, settings.tagFolderMappings);
   if (mapping) return [joinVaultPath(mapping.folder, fileName)];
-  return [];
+  return settings.rootFolder ? [joinVaultPath(normalizeVaultPath(settings.rootFolder), fileName)] : [];
 }
 
 function yamlString(value: string): string {
@@ -323,7 +364,7 @@ interface FrontmatterParts {
 }
 
 function splitFrontmatter(content: string): FrontmatterParts | null {
-  const match = content.match(/^(\uFEFF?---\r?\n)([\s\S]*?)(\r?\n---)([\s\S]*)$/);
+  const match = content.match(/^(\uFEFF?---\r?\n)([\s\S]*?)(\r?\n---)(?=\r?\n|$)([\s\S]*)$/);
   if (!match) return null;
   return { open: match[1], yaml: match[2], close: match[3], rest: match[4] };
 }
@@ -446,7 +487,8 @@ export function mergeStandardTags(
   const markerIndex = lines.findIndex(line => line.trim() === FRONTMATTER_END);
   const insertAt = markerIndex >= 0 ? markerIndex + 1 : 0;
   lines.splice(insertAt, 0, ...standardTagsBlock(mergedTags).split('\n'));
-  const yaml = lines.join('\n').replace(/\n{3,}/g, '\n\n');
+  const newline = frontmatter.open.endsWith('\r\n') ? '\r\n' : '\n';
+  const yaml = lines.join(newline);
   return {
     ok: true,
     content: `${frontmatter.open}${yaml}${frontmatter.close}${frontmatter.rest}`,
@@ -471,9 +513,10 @@ ${FRONTMATTER_END}`;
 
 function managedBodyBlock(memo: FlomoMemo, options: ManagedRenderOptions): string {
   const markdown = htmlToMarkdown(memo.content, options.imageMap || {});
+  const inlinePaths = new Set(extractImageSources(memo.content).map(url => options.imageMap?.[url] || url));
   const attachments = (options.extraAttachmentPaths || [])
-    .filter(path => !Object.values(options.imageMap || {}).includes(path))
-    .map(path => `![[${path}]]`);
+    .filter((path, index, all) => !inlinePaths.has(path) && all.indexOf(path) === index)
+    .map(path => /^https?:\/\//i.test(path) ? `[附件](<${path.replace(/>/g, '%3E')}>)` : `![[${path}]]`);
   const attachmentBlock = attachments.length > 0 ? `\n\n${attachments.join('\n')}` : '';
   return `${BODY_START}
 ${markdown}${attachmentBlock}
@@ -483,7 +526,7 @@ ${BODY_END}`;
 export function buildNewMemoFile(memo: FlomoMemo, options: ManagedRenderOptions): string {
   const template = renderYamlTemplate(options.yamlTemplate || '', memo);
   const extraYaml = [standardTagsBlock(extractTags(memo)), template].filter(Boolean).join('\n');
-  return `---
+  const content = `---
 ${managedFrontmatterBlock(memo, options)}
 ${extraYaml}
 ---
@@ -493,42 +536,128 @@ ${managedBodyBlock(memo, options)}
 ## 我的补充
 
 `;
+  const validation = inspectManagedMemo(content, memo.slug);
+  if (!validation.ok) throw new Error(`无法创建受管笔记：${validation.reason}`);
+  return content;
 }
 
-function replaceManagedBlock(content: string, startMarker: string, endMarker: string, replacement: string): MergeResult {
-  const start = content.indexOf(startMarker);
-  const end = content.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0 || end < start) {
-    return { ok: false, content, reason: `缺少受管区标记 ${startMarker}` };
+interface ManagedRegion {
+  start: number;
+  end: number;
+}
+
+type ManagedInspection = {
+  ok: true;
+  metadata: ManagedRegion;
+  body: ManagedRegion;
+  newline: string;
+} | {
+  ok: false;
+  content: string;
+  reason: string;
+};
+
+function findManagedRegion(content: string, startMarker: string, endMarker: string): ManagedRegion | string {
+  for (const marker of [startMarker, endMarker]) {
+    const index = content.indexOf(marker);
+    if (index < 0) return `缺少受管区标记 ${marker}`;
+    if (content.indexOf(marker, index + marker.length) >= 0) return `受管区标记重复 ${marker}`;
+    const after = content.slice(index + marker.length);
+    if ((index > 0 && content[index - 1] !== '\n') || !/^(?:\r?\n|$)/.test(after)) {
+      return `受管区标记必须独占一行 ${marker}`;
+    }
   }
-  const suffixStart = end + endMarker.length;
+  const start = content.indexOf(startMarker);
+  const end = content.indexOf(endMarker);
+  if (end < start) return `受管区标记顺序错误 ${startMarker}`;
+  return { start, end: end + endMarker.length };
+}
+
+function readManagedSlug(value: string): string | null {
+  const scalar = value.trim();
+  if (scalar.startsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(scalar);
+      return typeof parsed === 'string' && parsed.length > 0 ? parsed : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+  if (/^'(?:[^']|'')+'$/.test(scalar)) return scalar.slice(1, -1).replace(/''/g, "'");
+  return /^[A-Za-z0-9_-]+$/.test(scalar) ? scalar : null;
+}
+
+// Validate the entire file before replacing anything. A familiar path or one
+// matching marker is not enough to establish ownership of a local note.
+function inspectManagedMemo(content: string, expectedSlug?: string): ManagedInspection {
+  const fail = (reason: string): ManagedInspection => ({ ok: false, content, reason });
+  const frontmatter = splitFrontmatter(content);
+  if (!frontmatter) return fail('缺少文件顶部完整的 YAML frontmatter');
+
+  const metadata = findManagedRegion(content, FRONTMATTER_START, FRONTMATTER_END);
+  if (typeof metadata === 'string') return fail(metadata);
+  const body = findManagedRegion(content, BODY_START, BODY_END);
+  if (typeof body === 'string') return fail(body);
+
+  const yamlStart = frontmatter.open.length;
+  const yamlEnd = yamlStart + frontmatter.yaml.length;
+  if (metadata.start < yamlStart || metadata.end > yamlEnd) {
+    return fail('元数据受管区必须位于文件顶部的 YAML frontmatter 内');
+  }
+  if (body.start < yamlEnd + frontmatter.close.length) {
+    return fail('正文受管区必须位于 YAML frontmatter 之后');
+  }
+
+  const slugFields = frontmatter.yaml.match(/^(?:flomo_slug|"flomo_slug"|'flomo_slug')[ \t]*:.*$/gm) || [];
+  if (slugFields.length !== 1) return fail('flomo_slug 缺失或重复，无法确认笔记身份');
+  const managedYaml = content.slice(metadata.start, metadata.end);
+  const slugMatch = managedYaml.match(/^flomo_slug:[ \t]*(.*)$/m);
+  const slug = slugMatch ? readManagedSlug(slugMatch[1]) : null;
+  if (!slug) return fail('受管区内缺少可确认的 flomo_slug');
+  if (expectedSlug !== undefined && slug !== expectedSlug) {
+    return fail('flomo_slug 与待同步笔记不一致，已保留原文件');
+  }
   return {
     ok: true,
-    content: content.slice(0, start) + replacement + content.slice(suffixStart),
+    metadata,
+    body,
+    newline: frontmatter.open.endsWith('\r\n') ? '\r\n' : '\n',
   };
 }
 
+function replaceRegion(content: string, region: ManagedRegion, replacement: string): string {
+  return content.slice(0, region.start) + replacement + content.slice(region.end);
+}
+
+function withNewline(content: string, newline: string): string {
+  return content.replace(/\r?\n/g, newline);
+}
+
 export function mergeManagedMemo(content: string, memo: FlomoMemo, options: ManagedRenderOptions): MergeResult {
+  const inspection = inspectManagedMemo(content, memo.slug);
+  if (!inspection.ok) return inspection;
+  if (options.updateMode === 'new-only') return { ok: true, content };
+
   const legacyFlomoTags = extractYamlTags(content, 'flomo_tags');
-  const frontmatter = replaceManagedBlock(
-    content,
-    FRONTMATTER_START,
-    FRONTMATTER_END,
-    managedFrontmatterBlock(memo, options),
-  );
-  if (!frontmatter.ok) return frontmatter;
+  // Replace the later region first so the original metadata offsets stay valid.
+  const body = options.updateMode === 'properties' ? content : replaceRegion(content, inspection.body, withNewline(managedBodyBlock(memo, options), inspection.newline));
+  if (options.updateMode === 'body') {
+    const validation = inspectManagedMemo(body, memo.slug);
+    return validation.ok ? { ok: true, content: body } : { ...validation, content };
+  }
+  const updated = replaceRegion(body, inspection.metadata, withNewline(managedFrontmatterBlock(memo, options), inspection.newline));
   const tags = mergeStandardTags(
-    frontmatter.content,
+    updated,
     extractTags(memo),
     legacyFlomoTags.length > 0 ? legacyFlomoTags : options.previousFlomoTags,
   );
-  if (!tags.ok) return tags;
-  return replaceManagedBlock(
-    tags.content,
-    BODY_START,
-    BODY_END,
-    managedBodyBlock(memo, options),
-  );
+  if (!tags.ok) return { ...tags, content };
+
+  // Remote content can contain reserved markers too. Never return a partially
+  // modified file if rendering or tag merging produces an ambiguous document.
+  const validation = inspectManagedMemo(tags.content, memo.slug);
+  if (!validation.ok) return { ...validation, content };
+  return { ok: true, content: tags.content };
 }
 
 function replaceManagedField(block: string, key: string, value: string | null): string {
@@ -545,14 +674,12 @@ export function updateManagedStatus(
   syncPolicy: ManagedSyncPolicy,
   syncedAt: string,
   deletedDetectedAt?: string,
+  expectedSlug?: string,
 ): MergeResult {
-  const start = content.indexOf(FRONTMATTER_START);
-  const end = content.indexOf(FRONTMATTER_END, start + FRONTMATTER_START.length);
-  if (start < 0 || end < 0 || end < start) {
-    return { ok: false, content, reason: `缺少受管区标记 ${FRONTMATTER_START}` };
-  }
-  const suffixStart = end + FRONTMATTER_END.length;
-  let block = content.slice(start, suffixStart);
+  const inspection = inspectManagedMemo(content, expectedSlug);
+  if (!inspection.ok) return inspection;
+  const region = inspection.metadata;
+  let block = content.slice(region.start, region.end).replace(/\r\n/g, '\n');
   block = replaceManagedField(block, 'flomo_status', status);
   block = replaceManagedField(block, 'flomo_sync_policy', syncPolicy);
   block = replaceManagedField(block, 'flomo_last_synced_at', yamlString(syncedAt));
@@ -561,11 +688,14 @@ export function updateManagedStatus(
     'flomo_deleted_detected_at',
     deletedDetectedAt ? yamlString(deletedDetectedAt) : null,
   );
-  return { ok: true, content: content.slice(0, start) + block + content.slice(suffixStart) };
+  const updated = replaceRegion(content, region, withNewline(block, inspection.newline));
+  const validation = inspectManagedMemo(updated, expectedSlug);
+  if (!validation.ok) return { ...validation, content };
+  return { ok: true, content: updated };
 }
 
-export function hasManagedMarkers(content: string): boolean {
-  return [FRONTMATTER_START, FRONTMATTER_END, BODY_START, BODY_END].every(marker => content.includes(marker));
+export function hasManagedMarkers(content: string, expectedSlug?: string): boolean {
+  return inspectManagedMemo(content, expectedSlug).ok;
 }
 
 export function extractImageSources(html: string): string[] {

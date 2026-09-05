@@ -2,17 +2,19 @@ import esbuild from 'esbuild';
 import { spawnSync } from 'child_process';
 import process from 'process';
 
-const outfile = '.test-dist/sync-core.test.cjs';
+for (const suite of ['sync-core', 'managed-safety', 'plugin-safety', 'v030']) {
+  const outfile = `.test-dist/${suite}.test.cjs`;
+  await esbuild.build({
+    entryPoints: [`tests/${suite}.test.ts`],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node18',
+    outfile,
+    logLevel: 'info',
+    alias: { obsidian: './tests/obsidian-mock.ts' },
+  });
 
-await esbuild.build({
-  entryPoints: ['tests/sync-core.test.ts'],
-  bundle: true,
-  platform: 'node',
-  format: 'cjs',
-  target: 'node18',
-  outfile,
-  logLevel: 'info',
-});
-
-const result = spawnSync(process.execPath, [outfile], { stdio: 'inherit' });
-process.exit(result.status ?? 1);
+  const result = spawnSync(process.execPath, [outfile], { stdio: 'inherit' });
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}

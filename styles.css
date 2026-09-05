@@ -1,28 +1,52 @@
-/* Flomo Safe Sync Plugin Styles */
-.flomo-sync-status {
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  margin-top: 8px;
+.flomo-safe-sync-settings { max-width: 1080px; margin: 0 auto; container-type: inline-size; }
+.flomo-safe-sync-settings .flomo-settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.flomo-safe-sync-settings h2 { margin: 0 0 8px; }
+.flomo-safe-sync-settings h3 { margin: 24px 0 12px; }
+.flomo-safe-sync-settings .flomo-muted { color: var(--text-muted); font-size: var(--font-ui-small); line-height: 1.6; overflow-wrap: anywhere; }
+.flomo-safe-sync-settings .flomo-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--background-modifier-border); padding: 0 0 8px; }
+.flomo-safe-sync-settings .flomo-tabs button { flex-shrink: 0; box-shadow: none; background: transparent; color: var(--text-muted); padding: 10px 14px; height: auto; }
+.flomo-safe-sync-settings .flomo-tabs button.is-active { background: var(--background-modifier-hover); color: var(--text-accent); font-weight: 600; }
+.flomo-safe-sync-settings .flomo-panel { border: 0; margin: 0; padding: 4px 0 24px; min-width: 0; }
+.flomo-safe-sync-settings .flomo-panel:disabled { opacity: 0.6; }
+.flomo-safe-sync-settings .setting-item { gap: 16px; }
+.flomo-safe-sync-settings .setting-item-control { flex-wrap: wrap; gap: 8px; }
+.flomo-safe-sync-settings .flomo-wide { width: 260px; max-width: 100%; }
+.flomo-safe-sync-settings .flomo-template-input { width: 100%; min-width: 0; height: 38px; }
+.flomo-safe-sync-settings .flomo-editor-card { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 18px; margin: 12px 0; min-width: 0; }
+.flomo-safe-sync-settings .flomo-default-template { display: block; overflow-wrap: anywhere; padding: 8px 0; }
+.flomo-safe-sync-settings .flomo-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--background-primary); border-radius: 6px; padding: 14px; font-size: var(--font-ui-small); line-height: 1.7; min-height: 74px; }
+.flomo-safe-sync-settings .flomo-variable-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.flomo-safe-sync-settings .flomo-variable-toolbar button { font-family: var(--font-monospace); font-size: 11px; }
+.flomo-safe-sync-settings .flomo-variable-reference { font-size: var(--font-ui-small); margin: 10px 0; }
+.flomo-safe-sync-settings summary { cursor: pointer; color: var(--text-accent); padding: 8px 0; }
+.flomo-safe-sync-settings .flomo-feedback { color: var(--text-muted); font-size: var(--font-ui-small); margin: 12px 0; overflow-wrap: anywhere; }
+.flomo-safe-sync-settings .flomo-feedback.is-error { color: var(--text-error); }
+.flomo-safe-sync-settings .flomo-yaml-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
+.flomo-safe-sync-settings .flomo-yaml-input { display: block; width: 100%; min-height: 260px; resize: vertical; margin-top: 12px; padding: 12px; font-family: var(--font-monospace); line-height: 1.7; tab-size: 2; }
+.flomo-safe-sync-settings .flomo-selected-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+.flomo-safe-sync-settings .flomo-chip { color: var(--text-accent); border-radius: 20px; }
+.flomo-safe-sync-settings .flomo-tag-picker > button { margin: 8px 0; }
+.flomo-safe-sync-settings .flomo-tag-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; max-height: 180px; overflow-y: auto; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.flomo-safe-sync-settings .flomo-tag-option { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.flomo-safe-sync-settings .flomo-mapping-row { align-items: flex-start; }
+.flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex: 0 0 80px; }
+.flomo-safe-sync-settings .flomo-mapping-row input { min-width: 0; width: 180px; max-width: 100%; }
+.flomo-safe-sync-settings .flomo-trash-row { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--background-modifier-border); align-items: flex-start; }
+.flomo-safe-sync-settings .flomo-trash-row > div { min-width: 0; }
+.flomo-safe-sync-settings :focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+@container (max-width: 620px) {
+  .flomo-safe-sync-settings .flomo-yaml-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .flomo-safe-sync-settings .setting-item { flex-direction: column; align-items: stretch; }
+  .flomo-safe-sync-settings .setting-item-control { justify-content: flex-start; }
+  .flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex-basis: auto; }
 }
-
-.flomo-sync-status.success {
-  color: var(--text-success);
-}
-
-.flomo-sync-status.error {
-  color: var(--text-error);
-}
-
-.flomo-safe-sync-settings textarea {
-  min-height: 7rem;
-  width: 100%;
-}
-
-.flomo-safe-sync-settings .flomo-sync-wide-input {
-  min-width: 16rem;
-}
-
-.flomo-safe-sync-settings .flomo-sync-mapping-row .setting-item-control {
-  flex-wrap: wrap;
-  gap: 0.5rem;
+@media (max-width: 720px) {
+  .flomo-safe-sync-settings .flomo-yaml-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .flomo-safe-sync-settings .setting-item { flex-direction: column; align-items: stretch; }
+  .flomo-safe-sync-settings .setting-item-control { justify-content: flex-start; }
+  .flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex-basis: auto; }
+  .flomo-safe-sync-settings .flomo-wide { width: 100%; }
+  .flomo-safe-sync-settings .flomo-settings-header { align-items: flex-start; }
+  .flomo-safe-sync-settings .flomo-settings-header > button { flex-shrink: 0; }
+  .flomo-safe-sync-settings .flomo-editor-card { padding: 12px; }
 }
