@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import FlomoSafeSyncPlugin from '../main';
-import { CURRENT_SETTINGS_VERSION, DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
+import { CURRENT_SETTINGS_VERSION, DEFAULT_FILE_NAME, LEGACY_DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
 import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateNoteTemplate, validateYamlTemplate } from '../sync-core';
 import { App, MemoryAdapter, clearMockObservations, getMockState, parseYaml, resetObsidianMock, setLoadedData, setMockMemos, setMockResponses } from './obsidian-mock';
 
@@ -41,7 +41,36 @@ test('v0.2 migration preserves include scope, custom template and history; runs 
   assert.deepEqual(migrateSettings(migrated), migrated); assert.equal(migrateSettings({ fileNameTemplate: DEFAULT_FILE_NAME }).fileNameMode, 'default');
   assert.equal(old.tagFolderMappings[0].tag, '#写作');
 });
-test('default settings never share arrays or records', () => { const a = migrateSettings(), b = migrateSettings(); a.scopeTags.push('a'); assert.deepEqual(b.scopeTags, []); });
+test('fresh settings use the recommended filename date pattern and never share arrays', () => {
+  const a = migrateSettings(), b = migrateSettings();
+  assert.equal(a.fileNameTemplate, '{{yyyy-MM-dd}}_{{HH-mm-ss}}_{{title:20}}_{{slug:8}}');
+  assert.equal(a.defaultFileNameTemplate, DEFAULT_FILE_NAME);
+  a.scopeTags.push('a'); assert.deepEqual(b.scopeTags, []);
+});
+test('v5 migration preserves the legacy default filename until explicit adoption', () => {
+  const saved = {
+    ...migrateSettings(), settingsVersion: 5, fileNameMode: 'default' as const,
+    fileNameTemplate: LEGACY_DEFAULT_FILE_NAME, customFileNameTemplate: '{{slug}}',
+  };
+  delete (saved as Partial<FlomoSafeSyncSettings>).defaultFileNameTemplate;
+  const migrated = migrateSettings(saved);
+  assert.equal(migrated.settingsVersion, CURRENT_SETTINGS_VERSION);
+  assert.equal(migrated.defaultFileNameTemplate, LEGACY_DEFAULT_FILE_NAME);
+  assert.equal(migrated.fileNameTemplate, LEGACY_DEFAULT_FILE_NAME);
+  assert.equal(migrated.customFileNameTemplate, '{{slug}}');
+  assert.deepEqual(migrateSettings(migrated), migrated);
+});
+test('v5 custom mode keeps its custom template and the previous default separately', () => {
+  const saved = {
+    ...migrateSettings(), settingsVersion: 5, fileNameMode: 'custom' as const,
+    fileNameTemplate: '{{slug}}', customFileNameTemplate: '{{slug}}',
+  };
+  delete (saved as Partial<FlomoSafeSyncSettings>).defaultFileNameTemplate;
+  const migrated = migrateSettings(saved);
+  assert.equal(migrated.fileNameTemplate, '{{slug}}');
+  assert.equal(migrated.customFileNameTemplate, '{{slug}}');
+  assert.equal(migrated.defaultFileNameTemplate, LEGACY_DEFAULT_FILE_NAME);
+});
 test('v3 to current migration preserves saved values and unknown extension data', () => {
   const saved = {
     settingsVersion: 3, localizeImages: false, autoSyncIntervalMinutes: 0, scopeTags: [], tagFolderMappings: [],

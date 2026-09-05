@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const PORT = 19223;
 const VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
-const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v032';
+const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v033';
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 const page = targets.find(target => target.title.startsWith('设置 - vault')) || targets.find(target => target.type === 'page' && target.url.includes('obsidian.md')) || targets.find(target => target.type === 'page');
 if (!page) throw new Error('Isolated Obsidian page unavailable');
@@ -71,7 +71,11 @@ try {
     await button('保存文件名设置'); await waitSaved();
     await change('[aria-label="自定义文件名模板"]','{{unknown}}'); await button('保存文件名设置');
     assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.fileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
-    await change('.flomo-panel select','default','change'); await button('保存文件名设置'); await waitSaved();
+    await change('.flomo-panel select','default','change');
+    if (await evaluate(`[...document.querySelectorAll('.flomo-panel button')].some(x=>x.textContent==='采用推荐默认格式')`)) await button('采用推荐默认格式');
+    assert.equal(await evaluate(`document.querySelector('.flomo-default-template').textContent`),'{{yyyy-MM-dd}}_{{HH-mm-ss}}_{{title:20}}_{{slug:8}}');
+    await button('保存文件名设置'); await waitSaved();
+    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.fileNameTemplate`),'{{yyyy-MM-dd}}_{{HH-mm-ss}}_{{title:20}}_{{slug:8}}');
     assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     await button('还原'); await change('.flomo-panel select','custom','change'); await button('保存文件名设置'); await waitSaved();
     assert.ok((await evaluate(`document.querySelector('.flomo-preview').textContent`)).includes('2026-09-01_080910'));
@@ -112,7 +116,7 @@ try {
     await clickTab('connection');
     const compact=await evaluate(`(()=>{const row=[...document.querySelectorAll('.setting-item')].find(x=>x.querySelector('.setting-item-name')?.textContent==='启动时同步'),a=row.querySelector('.setting-item-info').getBoundingClientRect(),b=row.querySelector('.setting-item-control').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<12,rowHeight:row.getBoundingClientRect().height};})()`);
     assert.ok(compact.sameRow);
-    const result={obsidian:'1.13.7',version:'0.3.2',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,automaticMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry};
+    const result={obsidian:'1.13.7',version:'0.3.3',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,automaticMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry};
     await fs.writeFile(`${OUTPUT}/ui-results.json`,JSON.stringify(result,null,2)); console.log(result);
 
   }

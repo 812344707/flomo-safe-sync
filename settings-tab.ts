@@ -9,9 +9,12 @@ import { BODY_END, BODY_START, DEFAULT_NOTE_TEMPLATE, FRONTMATTER_END, FRONTMATT
 export const SAMPLE_MEMO: FlomoMemo = { slug: 'abcdef123456', content: '<p>第一条写作想法</p>',
   tags: [{ name: '写作' }, { name: '素材' }], created_at: '2026-09-01 08:09:10', updated_at: '2026-09-01 08:09:10' };
 const TABS = [['connection', '连接与同步'], ['naming', '保存与命名'], ['scope', '同步范围'], ['yaml', '笔记模板'], ['safety', '更新与安全']] as const;
-const TIME_VARIABLES = [
-  ['{{yyyy-MM-dd}}', '自定义日期格式：年-月-日', '2026-09-01'],
-  ['{{yyyyMMdd-HHmmss}}', '自定义日期时间格式', '20260901-080910'],
+const RECOMMENDED_TIME_VARIABLES = [
+  ['{{yyyy-MM-dd}}', '推荐日期格式：年-月-日', '2026-09-01'],
+  ['{{yyyy-MM-dd_HH-mm-ss}}', '推荐日期时间格式（24 小时制）', '2026-09-01_08-09-10'],
+  ['{{yyyyMMdd-HHmmss}}', '推荐紧凑日期时间格式', '20260901-080910'],
+] as const;
+const LEGACY_TIME_VARIABLES = [
   ['{{date}}', '完整创建日期', '2026-09-01'], ['{{time}}', '完整创建时间，使用文件名安全分隔符', '08-09-10'],
   ['{{year}}', '四位年份', '2026'], ['{{month}}', '两位月份', '09'], ['{{day}}', '两位日期', '01'],
   ['{{hour}}', '两位小时', '08'], ['{{minute}}', '两位分钟', '09'], ['{{second}}', '两位秒数', '10'],
@@ -28,6 +31,7 @@ const CONTENT_VARIABLES = [
 export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   activeTab: string = 'connection';
   draftFileMode: 'default' | 'custom';
+  draftDefaultFileTemplate: string;
   draftFileTemplate: string;
   draftNoteTemplate: string;
   private busy = false;
@@ -41,6 +45,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   }
   private resetFileDraft(): void {
     this.draftFileMode = this.plugin.settings.fileNameMode;
+    this.draftDefaultFileTemplate = this.plugin.settings.defaultFileNameTemplate || DEFAULT_FILE_NAME;
     this.draftFileTemplate = this.plugin.settings.customFileNameTemplate;
   }
   private async action(work: () => Promise<unknown>): Promise<void> {
@@ -76,8 +81,8 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   private variables(parent: HTMLElement, insert: (value: string) => void, includeStructure = false): void {
     const toolbar = parent.createDiv({ cls: 'flomo-variable-toolbar' });
     const timeGroup = toolbar.createDiv({ cls: 'flomo-variable-group' });
-    timeGroup.createSpan({ text: '时间', cls: 'flomo-variable-group-label' });
-    for (const [token, description, example] of TIME_VARIABLES) {
+    timeGroup.createSpan({ text: '推荐时间格式', cls: 'flomo-variable-group-label' });
+    for (const [token, description, example] of RECOMMENDED_TIME_VARIABLES) {
       const button = timeGroup.createEl('button', { text: token, attr: { type: 'button', title: `${description} · ${example}` } });
       button.addEventListener('click', () => insert(token));
     }
@@ -98,12 +103,23 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     const timeReference = parent.createEl('details', { cls: 'flomo-variable-reference' });
     timeReference.open = true;
     timeReference.createEl('summary', { text: '时间变量参考' });
+    timeReference.createEl('p', { cls: 'flomo-muted', text: '新模板推荐使用以下 Unicode 风格日期字段；输出采用便于排序且适合文件名的年-月-日顺序。' });
     const table = timeReference.createDiv({ cls: 'flomo-variable-table' });
-    for (const [token, description, example] of TIME_VARIABLES) {
+    for (const [token, description, example] of RECOMMENDED_TIME_VARIABLES) {
       const row = table.createDiv({ cls: 'flomo-variable-reference-row' });
       row.createEl('code', { text: token }); row.createSpan({ text: description }); row.createEl('code', { text: example });
     }
-    timeReference.createEl('p', { cls: 'flomo-muted', text: '日期格式占位符可组合：yyyy/yy 年，MM/M 月，dd/d 日，HH/H 时，mm/m 分，ss/s 秒；大小写有区别，可使用 -、_、. 或空格分隔。' });
+    timeReference.createEl('p', { cls: 'flomo-muted', text: '可组合字段：yyyy/yy 年，MM/M 月，dd/d 日，HH/H 24 小时，mm/m 分，ss/s 秒。大小写有区别；可使用 -、_、. 或空格分隔。' });
+    timeReference.createEl('p', { cls: 'flomo-muted', text: '请使用 yyyy 表示年份、dd 表示日期。大写 YYYY、DD 在通用日期规范中含义不同，本插件只对完整旧变量提供兼容。' });
+    const legacyTable = timeReference.createDiv({ cls: 'flomo-variable-table' });
+    legacyTable.createEl('strong', { text: '兼容旧格式' });
+    for (const [token, description, example] of LEGACY_TIME_VARIABLES) {
+      const row = legacyTable.createDiv({ cls: 'flomo-variable-reference-row' });
+      row.createEl('code', { text: token }); row.createSpan({ text: description }); row.createEl('code', { text: example });
+    }
+    const links = timeReference.createDiv({ cls: 'flomo-variable-links' });
+    links.createEl('a', { text: 'Unicode 日期字段规范 ↗', href: 'https://unicode.org/reports/tr35/tr35-dates.html#Date_Field_Symbol_Table', attr: { target: '_blank', rel: 'noopener noreferrer' } });
+    links.createEl('a', { text: '插件完整变量参考 ↗', href: 'https://github.com/812344707/flomo-safe-sync#保存位置和文件名', attr: { target: '_blank', rel: 'noopener noreferrer' } });
     const contentReference = parent.createEl('details', { cls: 'flomo-variable-reference' });
     contentReference.createEl('summary', { text: '内容变量参考' });
     for (const [token, description] of CONTENT_VARIABLES) contentReference.createEl('p', { text: `${token} — ${description}` });
@@ -113,7 +129,6 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
       structureReference.createEl('summary', { text: '同步结构占位符' });
       for (const [token, description] of NOTE_STRUCTURE_VARIABLES) structureReference.createEl('p', { text: `${token} — ${description}` });
     }
-    contentReference.createEl('a', { text: '打开在线变量参考 ↗', href: 'https://github.com/812344707/flomo-safe-sync#保存位置和文件名', attr: { target: '_blank', rel: 'noopener noreferrer' } });
   }
   private insert(input: HTMLInputElement | HTMLTextAreaElement, token: string, update: (value: string) => void): void {
     const start = input.selectionStart ?? input.value.length, end = input.selectionEnd ?? start;
@@ -182,11 +197,18 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     if (this.draftFileMode === 'custom') {
       input = editor.createEl('input', { cls: 'flomo-template-input', attr: { type: 'text', 'aria-label': '自定义文件名模板' } });
       input.value = this.draftFileTemplate;
-    } else editor.createEl('code', { text: DEFAULT_FILE_NAME, cls: 'flomo-default-template' });
+    } else {
+      editor.createEl('code', { text: this.draftDefaultFileTemplate, cls: 'flomo-default-template' });
+      if (this.draftDefaultFileTemplate !== DEFAULT_FILE_NAME) {
+        editor.createEl('p', { cls: 'flomo-muted', text: '当前保留升级前的默认模板。它会继续生效，直到你主动采用推荐格式并保存。' });
+        editor.createEl('button', { text: '采用推荐默认格式', attr: { type: 'button' } })
+          .addEventListener('click', () => { this.draftDefaultFileTemplate = DEFAULT_FILE_NAME; this.display(); });
+      } else editor.createEl('p', { cls: 'flomo-muted', text: '当前使用推荐的日期时间格式。' });
+    }
     const preview = editor.createEl('pre', { cls: 'flomo-preview', attr: { 'aria-live': 'polite' } });
     const feedback = editor.createDiv({ cls: 'flomo-feedback', attr: { role: 'status' } });
     const update = () => {
-      const template = this.draftFileMode === 'default' ? DEFAULT_FILE_NAME : this.draftFileTemplate;
+      const template = this.draftFileMode === 'default' ? this.draftDefaultFileTemplate : this.draftFileTemplate;
       const error = validateFileNameTemplate(template);
       feedback.textContent = error ? `未保存：${error}` : '草稿预览 · 点击保存后生效'; feedback.toggleClass('is-error', !!error);
       if (error) { preview.textContent = '请修正模板后查看预览'; return; }
@@ -198,9 +220,9 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
       this.variables(editor, token => this.insert(input!, token, value => { this.draftFileTemplate = value; update(); }));
     }
     new Setting(editor).addButton(button => button.setButtonText('保存文件名设置').setCta().onClick(async () => {
-      const template = this.draftFileMode === 'default' ? DEFAULT_FILE_NAME : this.draftFileTemplate;
+      const template = this.draftFileMode === 'default' ? this.draftDefaultFileTemplate : this.draftFileTemplate;
       const error = validateFileNameTemplate(template); if (error) { update(); return; }
-      Object.assign(this.plugin.settings, { fileNameMode: this.draftFileMode, fileNameTemplate: template,
+      Object.assign(this.plugin.settings, { fileNameMode: this.draftFileMode, defaultFileNameTemplate: this.draftDefaultFileTemplate, fileNameTemplate: template,
         customFileNameTemplate: this.draftFileMode === 'custom' ? this.draftFileTemplate : this.plugin.settings.customFileNameTemplate });
       await this.persist(); feedback.textContent = '已保存；现有笔记保持原文件名。';
     })).addButton(button => button.setButtonText('还原').onClick(() => { this.resetFileDraft(); this.display(); }));

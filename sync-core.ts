@@ -322,6 +322,9 @@ function validateTemplateVariables(template: string, label: string): string | nu
   const tokens = template.match(/{{[^}]+}}/g) || [];
   for (const token of tokens) {
     const expression = token.slice(2, -2);
+    if (/^[yYMDdHhms._ -]+$/.test(expression) && /[YD]/.test(expression) && expression !== 'YYYY-MM-DD-HHmmss') {
+      return `${label}日期格式请使用 yyyy 表示年份、dd 表示日期；仅完整旧变量 {{YYYY-MM-DD-HHmmss}} 保持兼容`;
+    }
     if (!isDateFormatExpression(expression)
       && !/^(?:date|time|year|month|day|hour|minute|second|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)$/.test(expression)) {
       return `不支持的${label}变量：${token}`;

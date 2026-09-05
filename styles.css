@@ -24,6 +24,7 @@
 .flomo-safe-sync-settings .flomo-variable-table { display: grid; gap: 3px; margin: 6px 0 10px; }
 .flomo-safe-sync-settings .flomo-variable-reference-row { display: grid; grid-template-columns: minmax(145px, auto) 1fr minmax(90px, auto); gap: 10px; align-items: baseline; padding: 4px 6px; border-radius: 4px; }
 .flomo-safe-sync-settings .flomo-variable-reference-row:nth-child(odd) { background: var(--background-primary-alt); }
+.flomo-safe-sync-settings .flomo-variable-links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
 .flomo-safe-sync-settings summary { cursor: pointer; color: var(--text-accent); padding: 8px 0; }
 .flomo-safe-sync-settings .flomo-feedback { color: var(--text-muted); font-size: var(--font-ui-small); margin: 12px 0; overflow-wrap: anywhere; }
 .flomo-safe-sync-settings .flomo-feedback.is-error { color: var(--text-error); }

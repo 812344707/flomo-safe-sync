@@ -50,9 +50,12 @@ assert.equal(validateFileNameTemplate('{{YYYY-MM-DD-HHmmss}}'), null);
 assert.equal(renderFileName('{{YYYY-MM-DD-HHmmss}}', original), '2026-09-01-080910');
 assert.equal(renderFileName('{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}', original), '20260901_080910');
 assert.equal(renderFileName('{{yyyy-MM-dd}}_{{HH-mm-ss}}', original), '2026-09-01_08-09-10');
+assert.equal(renderFileName('{{yyyy-MM-dd_HH-mm-ss}}', original), '2026-09-01_08-09-10');
 assert.equal(renderFileName('{{yy-M-d_H-m-s}}', original), '26-9-1_8-9-10');
 assert.equal(renderFileName('{{yyyyMMdd-HHmmss}}', original), '20260901-080910');
-assert.match(validateFileNameTemplate('{{YYYYMMDD}}') || '', /不支持/);
+assert.match(validateFileNameTemplate('{{YYYYMMDD}}') || '', /请使用 yyyy.*dd/);
+assert.match(validateFileNameTemplate('{{YYYY-MM-DD}}') || '', /请使用 yyyy.*dd/);
+assert.match(validateFileNameTemplate('{{MY_DATE}}') || '', /不支持/);
 assert.match(validateFileNameTemplate('{{yyyy/MM/dd}}') || '', /不支持/);
 assert.deepEqual(hierarchicalTags(['工作/项目/甲', '生活', '工作', '#工作/项目']), [
   { tag: '工作', depth: 0 }, { tag: '工作/项目', depth: 1 }, { tag: '工作/项目/甲', depth: 2 }, { tag: '生活', depth: 0 },

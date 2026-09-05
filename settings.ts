@@ -1,7 +1,10 @@
 import { DEFAULT_NOTE_TEMPLATE, ExcludedPolicy, TagFolderMapping, UpdateMode, createNoteTemplateFromYaml, normalizeTagList } from './sync-core';
 
-export const DEFAULT_FILE_NAME = '{{date}}_{{time}}_{{title:20}}_{{slug:8}}';
-export const CURRENT_SETTINGS_VERSION = 5;
+/** Recommended Unicode-style date fields for new installations. */
+export const DEFAULT_FILE_NAME = '{{yyyy-MM-dd}}_{{HH-mm-ss}}_{{title:20}}_{{slug:8}}';
+/** Previous default retained so existing installations keep identical filenames. */
+export const LEGACY_DEFAULT_FILE_NAME = '{{date}}_{{time}}_{{title:20}}_{{slug:8}}';
+export const CURRENT_SETTINGS_VERSION = 6;
 export type DeletionAction = 'keep' | 'mark' | 'archive' | 'trash';
 export interface FileState {
   path: string;
@@ -33,6 +36,8 @@ export interface FlomoSafeSyncSettings {
   bearerToken: string;
   rootFolder: string;
   fileNameMode: 'default' | 'custom';
+  /** The default-mode template saved for this installation. */
+  defaultFileNameTemplate: string;
   customFileNameTemplate: string;
   fileNameTemplate: string;
   noteTemplate: string;
@@ -56,7 +61,8 @@ export interface FlomoSafeSyncSettings {
 }
 export const DEFAULT_SETTINGS: FlomoSafeSyncSettings = {
   settingsVersion: CURRENT_SETTINGS_VERSION, bearerToken: '', rootFolder: '00-Flomo收件箱',
-  fileNameMode: 'default', fileNameTemplate: DEFAULT_FILE_NAME, customFileNameTemplate: DEFAULT_FILE_NAME,
+  fileNameMode: 'default', defaultFileNameTemplate: DEFAULT_FILE_NAME,
+  fileNameTemplate: DEFAULT_FILE_NAME, customFileNameTemplate: DEFAULT_FILE_NAME,
   noteTemplate: DEFAULT_NOTE_TEMPLATE, yamlTemplate: '', scopeMode: 'include', scopeTags: [], tagFolderMappings: [], availableFlomoTags: [],
   excludedTags: [], excludedPolicy: 'freeze', imageFolder: '00-Flomo收件箱/_attachments/flomo',
   localizeImages: true, updateMode: 'both', deletionAction: 'mark', archiveFolder: 'Flomo归档',
@@ -73,6 +79,10 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
   const settings = { ...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), ...loaded } as FlomoSafeSyncSettings;
   const sourceVersion = typeof loaded.settingsVersion === 'number' ? loaded.settingsVersion : 0;
 
+  // No persisted data means a genuinely new installation, which starts with
+  // the current recommended date pattern rather than a compatibility default.
+  if (Object.keys(loaded).length === 0) return settings;
+
   // A current or newer schema is never normalized or rewritten during load.
   // Object spread above only supplies settings introduced after it was saved.
   if (sourceVersion >= CURRENT_SETTINGS_VERSION) {
@@ -80,9 +90,12 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
     return settings;
   }
 
-  // v3/v4 -> v5 keeps every saved value and expands the old YAML-only template
-  // into the equivalent complete-note template. Existing notes are untouched.
+  // v3-v5 -> v6 keeps the exact active filename template. Default mode now has
+  // its own saved template so legacy installs do not silently change filenames.
   if (sourceVersion >= 3) {
+    settings.defaultFileNameTemplate = loaded.defaultFileNameTemplate
+      || (loaded.fileNameMode === 'default' ? loaded.fileNameTemplate : '')
+      || LEGACY_DEFAULT_FILE_NAME;
     settings.noteTemplate = loaded.noteTemplate || createNoteTemplateFromYaml(loaded.yamlTemplate || '');
     settings.settingsVersion = CURRENT_SETTINGS_VERSION;
     return settings;
@@ -97,10 +110,12 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
   settings.availableFlomoTags = normalizeTagList(loaded.availableFlomoTags || []);
   settings.excludedTags = normalizeTagList(loaded.excludedTags || []);
   settings.excludedPolicy = loaded.excludedPolicy === 'skip' ? 'skip' : 'freeze';
-  const oldTemplate = loaded.fileNameTemplate || DEFAULT_FILE_NAME;
-  settings.fileNameMode = loaded.fileNameMode || (oldTemplate === DEFAULT_FILE_NAME ? 'default' : 'custom');
+  const oldTemplate = loaded.fileNameTemplate || LEGACY_DEFAULT_FILE_NAME;
+  settings.fileNameMode = loaded.fileNameMode
+    || ([DEFAULT_FILE_NAME, LEGACY_DEFAULT_FILE_NAME].includes(oldTemplate) ? 'default' : 'custom');
+  settings.defaultFileNameTemplate = settings.fileNameMode === 'default' ? oldTemplate : LEGACY_DEFAULT_FILE_NAME;
   settings.customFileNameTemplate = loaded.customFileNameTemplate || oldTemplate;
-  settings.fileNameTemplate = settings.fileNameMode === 'default' ? DEFAULT_FILE_NAME : settings.customFileNameTemplate;
+  settings.fileNameTemplate = settings.fileNameMode === 'default' ? settings.defaultFileNameTemplate : settings.customFileNameTemplate;
   settings.noteTemplate = loaded.noteTemplate || createNoteTemplateFromYaml(loaded.yamlTemplate || '');
   settings.imageFolder = loaded.imageFolder || `${settings.rootFolder}/_attachments/flomo`;
   settings.updateMode = ['both', 'body', 'properties', 'new-only'].includes(loaded.updateMode || '') ? loaded.updateMode! : 'both';
