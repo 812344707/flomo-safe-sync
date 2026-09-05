@@ -38,6 +38,10 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   private busy = false;
   private suggestionId = 0;
   private selectedTrash = new Set<string>();
+  private expandedScopeTags = new Set<string>();
+  private scopeOnlySelected = false;
+  private scopeSearch = '';
+  private scopeAdvancedOpen = false;
 
   constructor(app: App, public plugin: FlomoSafeSyncPlugin, private login: () => Promise<string | null>) {
     super(app, plugin);
@@ -271,68 +275,162 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     search.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void addTag(); } });
     draw();
   }
-  private mappingTags(): string[] {
-    const excluded = new Set(this.plugin.settings.scopeMode === 'exclude' ? this.plugin.settings.scopeTags : []);
-    const eligible = this.plugin.settings.scopeMode === 'include'
-      ? normalizeTagList(this.plugin.settings.scopeTags)
-      : normalizeTagList([...this.plugin.settings.availableFlomoTags, ...this.plugin.settings.tagFolderMappings.map(mapping => mapping.tag)])
-        .filter(tag => !excluded.has(tag));
-    const configured = this.plugin.settings.tagFolderMappings.map(mapping => normalizeTag(mapping.tag)).filter(tag => eligible.includes(tag));
-    return [...configured, ...eligible.filter(tag => !configured.includes(tag))];
+  private scopeTreeTags(): Array<{ tag: string; depth: number }> {
+    const tags = normalizeTagList([
+      ...this.plugin.settings.availableFlomoTags,
+      ...this.plugin.settings.scopeTags,
+      ...this.plugin.settings.tagFolderMappings.map(mapping => mapping.tag),
+    ]);
+    const withAncestors = new Set<string>();
+    for (const tag of tags) {
+      const segments = tag.split('/');
+      for (let index = 1; index <= segments.length; index++) withAncestors.add(segments.slice(0, index).join('/'));
+    }
+    return hierarchicalTags([...withAncestors]);
   }
-  private scope(parent: HTMLElement): void {
-    parent.createEl('h3', { text: '哪些内容参与同步' });
-    new Setting(parent).setName('同步范围模式').setDesc(this.plugin.settings.scopeMode === 'include' ? '只同步命中任意所选标签的内容；未选择标签时不导入。' : '跳过命中任意所选标签的内容；未选择标签时同步全部，包括无标签内容。')
-      .addDropdown(dropdown => dropdown.addOption('include', '包括所选标签').addOption('exclude', '排除所选标签').setValue(this.plugin.settings.scopeMode).onChange(async value => { this.plugin.settings.scopeMode = value as 'include' | 'exclude'; await this.persist(); this.display(); }));
-    new Setting(parent).setName(`Flomo 标签（${this.plugin.settings.availableFlomoTags.length}）`).setDesc('按完整标签名匹配；选择父级会级联当前全部子级；退出范围的已有笔记原地保留。').addButton(button => button.setButtonText('刷新标签').setDisabled(!this.plugin.settings.bearerToken).onClick(() => this.action(() => this.plugin.refreshAvailableFlomoTags())));
-    this.tagPicker(parent, 'scopeTags');
-    parent.createEl('h3', { text: '标签 → 保存目录' });
-    parent.createEl('p', { cls: 'flomo-muted', text: '映射标签根据当前同步范围自动列出，只需选择右侧文件夹。已设置的映射从上到下优先；已有笔记不自动搬动。' });
-    this.pathSetting(parent, '未映射标签的默认位置', 'rootFolder', '无标签或没有设置专属映射的 memo 保存在这里。');
+  private scopeTagIsSynchronized(tag: string): boolean {
+    const selected = new Set(normalizeTagList(this.plugin.settings.scopeTags));
+    return this.plugin.settings.scopeMode === 'include' ? selected.has(tag) : !selected.has(tag);
+  }
+  private renderMappingPriority(parent: HTMLElement): void {
     const mappings = this.plugin.settings.tagFolderMappings;
-    const routeTags = this.mappingTags();
-    for (const [rowIndex, tag] of routeTags.entries()) {
-      const mappingIndex = mappings.findIndex(mapping => normalizeTag(mapping.tag) === tag);
-      const mapping = mappingIndex >= 0 ? mappings[mappingIndex] : undefined;
-      const row = new Setting(parent).setName(`#${tag}`).setDesc(mapping ? `专属目录 · 映射优先级 ${mappingIndex + 1}` : `使用默认位置：${this.plugin.settings.rootFolder}`);
-      row.settingEl.addClass('flomo-mapping-row');
-      row.settingEl.style.setProperty('--flomo-tag-depth', String(Math.max(0, tag.split('/').length - 1)));
-      row.addText(text => {
-        this.suggestions(row.settingEl, text.inputEl, this.folders());
-        text.inputEl.setAttribute('aria-label', `标签 #${tag} 的保存目录`);
-        text.setPlaceholder(`默认：${this.plugin.settings.rootFolder}`).setValue(mapping?.folder || '').onChange(async value => {
-          if (!value.trim()) {
-            const index = mappings.findIndex(item => normalizeTag(item.tag) === tag);
-            if (index >= 0) mappings.splice(index, 1);
-            await this.persist(); row.setDesc(`已使用默认位置：${this.plugin.settings.rootFolder}`); return;
+    if (!mappings.length) return;
+    const details = parent.createEl('details', { cls: 'flomo-scope-advanced' });
+    details.open = this.scopeAdvancedOpen;
+    details.addEventListener('toggle', () => { this.scopeAdvancedOpen = details.open; });
+    details.createEl('summary', { text: `高级设置 · 映射优先级（${mappings.length}）` });
+    details.createEl('p', { cls: 'flomo-muted', text: '一条 memo 同时命中多个专属目录时，使用这里最靠前的映射。调整顺序只影响后续新导入笔记。' });
+    const list = details.createDiv({ cls: 'flomo-priority-list' });
+    mappings.forEach((mapping, index) => {
+      const tag = normalizeTag(mapping.tag);
+      const row = list.createDiv({ cls: 'flomo-priority-row' });
+      const label = row.createDiv();
+      label.createEl('strong', { text: `${index + 1}. #${tag}` });
+      label.createEl('span', { text: mapping.folder, cls: 'flomo-muted' });
+      if (!this.scopeTagIsSynchronized(tag)) label.createEl('span', { text: '当前范围外，设置已保留', cls: 'flomo-muted' });
+      const actions = row.createDiv({ cls: 'flomo-priority-actions' });
+      for (const offset of [-1, 1]) {
+        const action = offset === -1 ? '提高' : '降低';
+        const button = actions.createEl('button', { text: offset === -1 ? '↑' : '↓', attr: { type: 'button', 'aria-label': `${action}标签 #${tag} 的映射优先级` } });
+        button.disabled = index + offset < 0 || index + offset >= mappings.length;
+        button.addEventListener('click', async () => {
+          [mappings[index], mappings[index + offset]] = [mappings[index + offset], mappings[index]];
+          this.scopeAdvancedOpen = true; await this.persist(); this.display();
+        });
+      }
+      actions.createEl('button', { text: '使用默认目录', attr: { type: 'button', 'aria-label': `清除标签 #${tag} 的专属目录` } }).addEventListener('click', async () => {
+        mappings.splice(index, 1); this.scopeAdvancedOpen = true; await this.persist(); this.display();
+      });
+    });
+  }
+  private renderScopeTree(parent: HTMLElement): void {
+    const tree = this.scopeTreeTags();
+    const treeTags = tree.map(item => item.tag);
+    const selectedTags = normalizeTagList(this.plugin.settings.scopeTags);
+    const selected = new Set(selectedTags);
+    const mappings = this.plugin.settings.tagFolderMappings;
+    const toolbar = parent.createDiv({ cls: 'flomo-scope-toolbar' });
+    const inputRow = toolbar.createDiv({ cls: 'flomo-tag-input-row' });
+    const search = inputRow.createEl('input', { cls: 'flomo-template-input', attr: { type: 'search', placeholder: '搜索或输入完整标签', 'aria-label': '搜索或添加同步范围标签' } });
+    search.value = this.scopeSearch;
+    const add = inputRow.createEl('button', { text: '添加标签', attr: { type: 'button' } });
+    const only = inputRow.createEl('button', { text: this.scopeOnlySelected ? '显示全部' : this.plugin.settings.scopeMode === 'include' ? '仅看已选' : '仅看已排除',
+      attr: { type: 'button', 'aria-pressed': String(this.scopeOnlySelected) } });
+    toolbar.createEl('span', { cls: 'flomo-scope-summary', text: `${this.plugin.settings.scopeMode === 'include' ? '已选' : '已排除'} ${selectedTags.length} 个标签 · ${mappings.length} 个专属目录` });
+    const list = parent.createDiv({ cls: 'flomo-scope-tree', attr: { role: 'treegrid', 'aria-label': '标签范围与保存目录' } });
+    const header = list.createDiv({ cls: 'flomo-scope-tree-header', attr: { role: 'row' } });
+    header.createSpan({ text: '标签', attr: { role: 'columnheader' } });
+    header.createSpan({ text: '保存目录（留空＝默认）', attr: { role: 'columnheader' } });
+    const draw = () => {
+      list.querySelectorAll('.flomo-scope-row, .flomo-empty-state').forEach(element => element.remove());
+      const query = this.scopeSearch.toLocaleLowerCase().replace(/^#/, '').trim();
+      const matching = query ? treeTags.filter(tag => tag.toLocaleLowerCase().includes(query)) : treeTags;
+      const selectedBranches = treeTags.filter(tag => selected.has(tag));
+      const visible = tree.filter(({ tag }) => {
+        const searchVisible = !query || matching.some(match => match === tag || match.startsWith(`${tag}/`));
+        const selectionVisible = !this.scopeOnlySelected || selectedBranches.some(chosen => chosen === tag || chosen.startsWith(`${tag}/`));
+        if (!searchVisible || !selectionVisible) return false;
+        if (query || this.scopeOnlySelected) return true;
+        const segments = tag.split('/');
+        const ancestors = segments.slice(0, -1).map((_segment, index) => segments.slice(0, index + 1).join('/'));
+        return ancestors.every(ancestor => !treeTags.includes(ancestor) || this.expandedScopeTags.has(ancestor));
+      });
+      for (const { tag, depth } of visible) {
+        const hasChildren = treeTags.some(candidate => candidate.startsWith(`${tag}/`));
+        const row = list.createDiv({ cls: 'flomo-scope-row', attr: { role: 'row', 'aria-level': String(depth + 1), title: `完整标签：#${tag}` } });
+        row.style.setProperty('--flomo-tag-depth', String(depth));
+        const tagCell = row.createDiv({ cls: 'flomo-scope-tag-cell', attr: { role: 'gridcell' } });
+        if (hasChildren) {
+          const expanded = !!query || this.scopeOnlySelected || this.expandedScopeTags.has(tag);
+          const expand = tagCell.createEl('button', { text: expanded ? '▾' : '▸', cls: 'flomo-scope-expand', attr: { type: 'button', 'aria-label': `${expanded ? '折叠' : '展开'}标签 #${tag}`, 'aria-expanded': String(expanded) } });
+          expand.addEventListener('click', () => {
+            if (this.expandedScopeTags.has(tag)) this.expandedScopeTags.delete(tag); else this.expandedScopeTags.add(tag);
+            draw();
+          });
+        } else tagCell.createSpan({ cls: 'flomo-scope-expand-spacer' });
+        const checkbox = tagCell.createEl('input', { attr: { type: 'checkbox', 'aria-label': `${this.plugin.settings.scopeMode === 'include' ? '包括' : '排除'}标签 #${tag}` } });
+        const state = tagSelectionState(treeTags, selectedTags, tag);
+        checkbox.checked = state.checked; checkbox.indeterminate = state.indeterminate;
+        checkbox.setAttribute('aria-checked', state.indeterminate ? 'mixed' : String(state.checked));
+        tagCell.createSpan({ text: `#${tag.split('/').at(-1)}`, cls: 'flomo-scope-tag-label' });
+        if (state.indeterminate) tagCell.createSpan({ text: '部分选择', cls: 'flomo-partial-state' });
+        checkbox.addEventListener('change', async () => {
+          this.plugin.settings.scopeTags = updateCascadingTagSelection(treeTags, selectedTags, tag, checkbox.checked);
+          await this.persist(); this.display();
+        });
+        const folderCell = row.createDiv({ cls: 'flomo-scope-folder-cell', attr: { role: 'gridcell' } });
+        const mappingIndex = mappings.findIndex(mapping => normalizeTag(mapping.tag) === tag);
+        const mapping = mappingIndex >= 0 ? mappings[mappingIndex] : undefined;
+        const folder = folderCell.createEl('input', { cls: 'flomo-scope-folder', attr: { type: 'text', placeholder: '默认目录', 'aria-label': `标签 #${tag} 的保存目录` } });
+        folder.value = mapping?.folder || '';
+        folder.disabled = !this.scopeTagIsSynchronized(tag);
+        this.suggestions(folderCell, folder, this.folders());
+        const status = folderCell.createSpan({ cls: 'flomo-scope-folder-status', attr: { role: 'status' } });
+        if (folder.disabled) status.textContent = mapping ? '范围外 · 已保留' : '范围外';
+        folder.addEventListener('change', async () => {
+          const value = folder.value.trim();
+          const currentIndex = mappings.findIndex(item => normalizeTag(item.tag) === tag);
+          if (!value) {
+            if (currentIndex >= 0) mappings.splice(currentIndex, 1);
+            status.textContent = '使用默认目录'; await this.persist(); this.display(); return;
           }
           const error = validateVaultRelativePath(value);
-          if (error) { row.setDesc(`未保存：${error}`); return; }
-          const folder = normalizeVaultPath(value);
-          const current = mappings.find(mapping => normalizeTag(mapping.tag) === tag);
-          if (current) current.folder = folder;
-          else {
-            const priorConfigured = routeTags.slice(0, rowIndex).reverse().find(prior => mappings.some(item => normalizeTag(item.tag) === prior));
-            const insertion = priorConfigured ? mappings.findIndex(item => normalizeTag(item.tag) === priorConfigured) + 1 : mappings.length;
-            mappings.splice(insertion, 0, { tag, folder });
-          }
-          await this.persist(); row.setDesc(`已保存：${folder}`);
+          if (error) { status.textContent = `未保存：${error}`; status.addClass('is-error'); return; }
+          const normalized = normalizeVaultPath(value);
+          const current = currentIndex >= 0 ? mappings[currentIndex] : undefined;
+          if (current) current.folder = normalized; else mappings.push({ tag, folder: normalized });
+          folder.value = normalized; status.removeClass('is-error'); status.textContent = '已保存'; await this.persist(); this.display();
         });
-      });
-      if (mapping) {
-        for (const offset of [-1, 1]) row.addExtraButton(button => button.setIcon(offset === -1 ? 'arrow-up' : 'arrow-down').setTooltip(offset === -1 ? '提高映射优先级' : '降低映射优先级')
-          .setDisabled(mappingIndex + offset < 0 || mappingIndex + offset >= mappings.length).onClick(async () => {
-            [mappings[mappingIndex], mappings[mappingIndex + offset]] = [mappings[mappingIndex + offset], mappings[mappingIndex]];
-            await this.persist(); this.display();
-          }));
-        row.addExtraButton(button => button.setIcon('rotate-ccw').setTooltip('改用默认位置').onClick(async () => {
-          mappings.splice(mappingIndex, 1); await this.persist(); this.display();
-        }));
       }
-    }
-    if (!routeTags.length) parent.createEl('p', { cls: 'flomo-empty-state', text: this.plugin.settings.scopeMode === 'include'
-      ? '请先在上方选择要包括的标签，映射行会自动出现。'
-      : '刷新 Flomo 标签后，未被排除的标签会自动显示在这里。' });
+      if (!visible.length) list.createEl('p', { cls: 'flomo-empty-state', text: tree.length ? '没有符合当前筛选的标签。' : '尚无标签。连接 Flomo 后刷新，或在上方手动输入完整标签。' });
+    };
+    search.addEventListener('input', () => { this.scopeSearch = search.value; draw(); });
+    const addTag = async () => {
+      const tag = normalizeTag(search.value); if (!tag) return;
+      const updatedTree = this.scopeTreeTags().map(item => item.tag);
+      this.plugin.settings.scopeTags = updateCascadingTagSelection([...updatedTree, tag], this.plugin.settings.scopeTags, tag, true);
+      this.scopeSearch = tag; await this.persist(); this.display();
+    };
+    add.addEventListener('click', () => { void addTag(); });
+    search.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void addTag(); } });
+    only.addEventListener('click', () => { this.scopeOnlySelected = !this.scopeOnlySelected; this.display(); });
+    draw();
+  }
+  private scope(parent: HTMLElement): void {
+    parent.createEl('h3', { text: '标签范围与保存目录' });
+    const modeDescription = this.plugin.settings.scopeMode === 'include'
+      ? '命中任意所选标签才同步；未选择标签时不导入。'
+      : '命中任意所选标签时跳过；未选择标签时同步全部，包括无标签内容。';
+    new Setting(parent).setName('同步范围').setDesc(`${modeDescription} 退出范围的已有笔记原地保留。`)
+      .addDropdown(dropdown => dropdown.addOption('include', '包括所选标签').addOption('exclude', '排除所选标签').setValue(this.plugin.settings.scopeMode).onChange(async value => {
+        this.plugin.settings.scopeMode = value as 'include' | 'exclude'; await this.persist(); this.display();
+      }))
+      .addButton(button => button.setButtonText(`刷新标签（${this.plugin.settings.availableFlomoTags.length}）`).setDisabled(!this.plugin.settings.bearerToken)
+        .onClick(() => this.action(() => this.plugin.refreshAvailableFlomoTags())));
+    this.pathSetting(parent, '默认保存目录', 'rootFolder', '无标签或没有设置专属目录的 memo 保存在这里。');
+    parent.createEl('p', { cls: 'flomo-muted', text: '勾选范围与专属目录放在同一棵标签树中。选择父级会级联全部子级；目录留空时使用默认保存目录。' });
+    this.renderScopeTree(parent);
+    this.renderMappingPriority(parent);
     parent.createEl('h3', { text: '图片与附件' });
     new Setting(parent).setName('图片本地化').setDesc('识别图床插件已替换的远程图片链接并记住映射，后续同步不再重新下载；下载失败时保留 Flomo 原链接。').addToggle(toggle => toggle.setValue(this.plugin.settings.localizeImages).onChange(async value => { this.plugin.settings.localizeImages = value; await this.persist(); }));
     this.pathSetting(parent, '图片保存目录', 'imageFolder', '目录下按 memo 编号分文件夹；只影响新导入 memo，已有图片沿用原目录。');

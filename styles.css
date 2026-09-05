@@ -50,8 +50,33 @@
 .flomo-safe-sync-settings .flomo-tag-option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px 3px calc(8px + var(--flomo-tag-depth, 0) * 20px); border-radius: 4px; overflow-wrap: anywhere; }
 .flomo-safe-sync-settings .flomo-tag-option:hover { background: var(--background-modifier-hover); }
 .flomo-safe-sync-settings .flomo-tag-option .flomo-partial-state { color: var(--text-accent); font-size: var(--font-ui-smaller); margin-inline-start: auto; }
-.flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex: 1 1 auto; padding-inline-start: calc(var(--flomo-tag-depth, 0) * 16px); }
-.flomo-safe-sync-settings .flomo-mapping-row input { min-width: 220px; width: 320px; max-width: 100%; }
+.flomo-safe-sync-settings .flomo-scope-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; margin: 10px 0 6px; }
+.flomo-safe-sync-settings .flomo-scope-toolbar .flomo-tag-input-row { min-width: 0; }
+.flomo-safe-sync-settings .flomo-scope-toolbar .flomo-tag-input-row input { min-width: 120px; }
+.flomo-safe-sync-settings .flomo-scope-summary { color: var(--text-muted); font-size: var(--font-ui-small); white-space: nowrap; }
+.flomo-safe-sync-settings .flomo-scope-tree { border: 1px solid var(--background-modifier-border); border-radius: 7px; overflow: hidden; }
+.flomo-safe-sync-settings .flomo-scope-tree-header,
+.flomo-safe-sync-settings .flomo-scope-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(190px, .9fr); align-items: center; min-width: 0; }
+.flomo-safe-sync-settings .flomo-scope-tree-header { min-height: 30px; padding: 0 10px; color: var(--text-muted); background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-smaller); font-weight: 600; }
+.flomo-safe-sync-settings .flomo-scope-row { min-height: 38px; padding: 3px 10px; border-bottom: 1px solid var(--background-modifier-border); }
+.flomo-safe-sync-settings .flomo-scope-row:last-child { border-bottom: 0; }
+.flomo-safe-sync-settings .flomo-scope-row:hover { background: var(--background-modifier-hover); }
+.flomo-safe-sync-settings .flomo-scope-tag-cell { display: flex; align-items: center; gap: 7px; min-width: 0; padding-inline-start: calc(var(--flomo-tag-depth, 0) * 20px); }
+.flomo-safe-sync-settings .flomo-scope-expand { width: 24px; height: 24px; min-width: 24px; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text-muted); }
+.flomo-safe-sync-settings .flomo-scope-expand:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.flomo-safe-sync-settings .flomo-scope-expand-spacer { width: 24px; min-width: 24px; }
+.flomo-safe-sync-settings .flomo-scope-tag-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flomo-safe-sync-settings .flomo-scope-tag-cell .flomo-partial-state { color: var(--text-accent); font-size: var(--font-ui-smaller); margin-inline-start: auto; white-space: nowrap; }
+.flomo-safe-sync-settings .flomo-scope-folder-cell { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; min-width: 0; }
+.flomo-safe-sync-settings .flomo-scope-folder { width: 100%; min-width: 0; }
+.flomo-safe-sync-settings .flomo-scope-folder-status { color: var(--text-muted); font-size: var(--font-ui-smaller); white-space: nowrap; }
+.flomo-safe-sync-settings .flomo-scope-folder-status.is-error { color: var(--text-error); white-space: normal; }
+.flomo-safe-sync-settings .flomo-scope-advanced { margin: 8px 0 18px; }
+.flomo-safe-sync-settings .flomo-priority-list { border: 1px solid var(--background-modifier-border); border-radius: 6px; overflow: hidden; }
+.flomo-safe-sync-settings .flomo-priority-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 7px 9px; border-bottom: 1px solid var(--background-modifier-border); }
+.flomo-safe-sync-settings .flomo-priority-row:last-child { border-bottom: 0; }
+.flomo-safe-sync-settings .flomo-priority-row > div:first-child { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.flomo-safe-sync-settings .flomo-priority-actions { display: flex; gap: 5px; flex: 0 0 auto; }
 .flomo-safe-sync-settings .flomo-empty-state { padding: 12px; color: var(--text-muted); border: 1px dashed var(--background-modifier-border); border-radius: 6px; }
 .flomo-safe-sync-settings .flomo-hierarchy-group { margin: 12px 0; padding: 2px 0 6px; }
 .flomo-safe-sync-settings .flomo-hierarchy-group h4 { margin: 8px 0; }
@@ -64,13 +89,22 @@
   .flomo-safe-sync-settings .flomo-yaml-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .flomo-safe-sync-settings .setting-item { flex-direction: column; align-items: stretch; }
   .flomo-safe-sync-settings .setting-item-control { justify-content: flex-start; }
-  .flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex-basis: auto; }
+  .flomo-safe-sync-settings .flomo-scope-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .flomo-safe-sync-settings .flomo-scope-summary { white-space: normal; }
+  .flomo-safe-sync-settings .flomo-scope-tree-header { display: none; }
+  .flomo-safe-sync-settings .flomo-scope-row { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-block: 7px; }
+  .flomo-safe-sync-settings .flomo-scope-folder-cell { padding-inline-start: calc(31px + var(--flomo-tag-depth, 0) * 20px); }
 }
 @media (max-width: 720px) {
   .flomo-safe-sync-settings .flomo-yaml-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .flomo-safe-sync-settings .setting-item { flex-direction: column; align-items: stretch; }
   .flomo-safe-sync-settings .setting-item-control { justify-content: flex-start; }
-  .flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex-basis: auto; }
+  .flomo-safe-sync-settings .flomo-scope-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .flomo-safe-sync-settings .flomo-scope-summary { white-space: normal; }
+  .flomo-safe-sync-settings .flomo-scope-tree-header { display: none; }
+  .flomo-safe-sync-settings .flomo-scope-row { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-block: 7px; }
+  .flomo-safe-sync-settings .flomo-scope-folder-cell { padding-inline-start: calc(31px + var(--flomo-tag-depth, 0) * 20px); }
+  .flomo-safe-sync-settings .flomo-priority-row { align-items: flex-start; }
   .flomo-safe-sync-settings .flomo-wide { width: 100%; }
   .flomo-safe-sync-settings .flomo-settings-header { align-items: flex-start; }
   .flomo-safe-sync-settings .flomo-settings-header > button { flex-shrink: 0; }
