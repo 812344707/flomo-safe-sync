@@ -1,6 +1,6 @@
 {
   "name": "flomo-safe-sync",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Safe, configurable Flomo to Obsidian sync",
   "main": "main.js",
   "scripts": {

@@ -4,7 +4,8 @@ import { DEFAULT_FILE_NAME, DeletionAction, FileState } from './settings';
 import { BODY_END, BODY_START, DEFAULT_NOTE_TEMPLATE, FRONTMATTER_END, FRONTMATTER_START, FlomoMemo,
   NOTE_CONTENT_TOKEN, NOTE_TAGS_TOKEN, UpdateMode, buildNewMemoFile,
   computeDesiredPaths, hierarchicalTags, normalizeTag, normalizeTagList, normalizeVaultPath,
-  renderFileName, validateFileNameTemplate, validateNoteTemplate, validateVaultRelativePath } from './sync-core';
+  renderFileName, tagSelectionState, updateCascadingTagSelection,
+  validateFileNameTemplate, validateNoteTemplate, validateVaultRelativePath } from './sync-core';
 
 export const SAMPLE_MEMO: FlomoMemo = { slug: 'abcdef123456', content: '<p>第一条写作想法</p>',
   tags: [{ name: '写作' }, { name: '素材' }], created_at: '2026-09-01 08:09:10', updated_at: '2026-09-01 08:09:10' };
@@ -234,29 +235,38 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     const inputRow = box.createDiv({ cls: 'flomo-tag-input-row' });
     const search = inputRow.createEl('input', { cls: 'flomo-template-input', attr: { type: 'search', placeholder: '搜索或输入完整标签', 'aria-label': key === 'scopeTags' ? '同步范围标签' : '更新例外标签' } });
     const add = inputRow.createEl('button', { text: '添加标签', attr: { type: 'button' } });
+    box.createEl('p', { cls: 'flomo-muted', text: '父级标签采用级联选择：选中或取消父级时，会同时处理它的全部子级；部分子级被选中时，父级显示半选状态。' });
     const list = box.createDiv({ cls: 'flomo-tag-options', attr: { role: 'tree', 'aria-label': key === 'scopeTags' ? '同步范围标签层级' : '更新例外标签层级' } });
-    const toggle = async (tag: string) => {
-      const tags = this.plugin.settings[key];
-      this.plugin.settings[key] = tags.includes(tag) ? tags.filter(value => value !== tag) : [...tags, tag];
+    const allTags = () => hierarchicalTags([...this.plugin.settings.availableFlomoTags, ...this.plugin.settings[key]]).map(item => item.tag);
+    const setSubtree = async (tag: string, checked: boolean) => {
+      this.plugin.settings[key] = updateCascadingTagSelection(allTags(), this.plugin.settings[key], tag, checked);
       await this.persist(); this.display();
     };
     const draw = () => {
       selected.empty(); list.empty();
       for (const tag of this.plugin.settings[key]) {
-        selected.createEl('button', { text: `#${tag} ×`, cls: 'flomo-chip', attr: { 'aria-label': `移除标签 ${tag}` } }).addEventListener('click', () => { void toggle(tag); });
+        selected.createEl('button', { text: `#${tag} ×`, cls: 'flomo-chip', attr: { 'aria-label': `移除标签 ${tag} 及其下级` } }).addEventListener('click', () => { void setSubtree(tag, false); });
       }
-      const available = hierarchicalTags([...this.plugin.settings.availableFlomoTags, ...this.plugin.settings[key]])
+      const tree = hierarchicalTags([...this.plugin.settings.availableFlomoTags, ...this.plugin.settings[key]]);
+      const treeTags = tree.map(item => item.tag);
+      const available = tree
         .filter(item => item.tag.toLocaleLowerCase().includes(search.value.toLocaleLowerCase().replace(/^#/, '')));
       for (const { tag, depth } of available) {
         const label = list.createEl('label', { cls: 'flomo-tag-option', attr: { role: 'treeitem', 'aria-level': String(depth + 1), title: `完整标签：#${tag}` } });
         label.style.setProperty('--flomo-tag-depth', String(depth));
-        const checkbox = label.createEl('input', { attr: { type: 'checkbox' } }); checkbox.checked = this.plugin.settings[key].includes(tag);
-        label.createSpan({ text: `#${tag}` }); checkbox.addEventListener('change', () => { void toggle(tag); });
+        const checkbox = label.createEl('input', { attr: { type: 'checkbox', 'aria-label': `选择标签 #${tag}` } });
+        const state = tagSelectionState(treeTags, this.plugin.settings[key], tag);
+        checkbox.checked = state.checked; checkbox.indeterminate = state.indeterminate;
+        checkbox.setAttribute('aria-checked', state.indeterminate ? 'mixed' : String(state.checked));
+        if (state.indeterminate) checkbox.addClass('flomo-is-indeterminate');
+        label.createSpan({ text: `#${tag}` });
+        if (state.indeterminate) label.createSpan({ text: '部分选择', cls: 'flomo-partial-state' });
+        checkbox.addEventListener('change', () => { void setSubtree(tag, checkbox.checked); });
       }
       if (!available.length) list.createEl('p', { cls: 'flomo-muted', text: '没有匹配标签，可以手动添加。' });
     };
     search.addEventListener('input', draw);
-    const addTag = async () => { const tag = normalizeTag(search.value); if (tag && !this.plugin.settings[key].includes(tag)) await toggle(tag); };
+    const addTag = async () => { const tag = normalizeTag(search.value); if (tag) await setSubtree(tag, true); };
     add.addEventListener('click', () => { void addTag(); });
     search.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void addTag(); } });
     draw();
@@ -274,7 +284,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     parent.createEl('h3', { text: '哪些内容参与同步' });
     new Setting(parent).setName('同步范围模式').setDesc(this.plugin.settings.scopeMode === 'include' ? '只同步命中任意所选标签的内容；未选择标签时不导入。' : '跳过命中任意所选标签的内容；未选择标签时同步全部，包括无标签内容。')
       .addDropdown(dropdown => dropdown.addOption('include', '包括所选标签').addOption('exclude', '排除所选标签').setValue(this.plugin.settings.scopeMode).onChange(async value => { this.plugin.settings.scopeMode = value as 'include' | 'exclude'; await this.persist(); this.display(); }));
-    new Setting(parent).setName(`Flomo 标签（${this.plugin.settings.availableFlomoTags.length}）`).setDesc('按完整标签名匹配；退出范围的已有笔记原地保留。').addButton(button => button.setButtonText('刷新标签').setDisabled(!this.plugin.settings.bearerToken).onClick(() => this.action(() => this.plugin.refreshAvailableFlomoTags())));
+    new Setting(parent).setName(`Flomo 标签（${this.plugin.settings.availableFlomoTags.length}）`).setDesc('按完整标签名匹配；选择父级会级联当前全部子级；退出范围的已有笔记原地保留。').addButton(button => button.setButtonText('刷新标签').setDisabled(!this.plugin.settings.bearerToken).onClick(() => this.action(() => this.plugin.refreshAvailableFlomoTags())));
     this.tagPicker(parent, 'scopeTags');
     parent.createEl('h3', { text: '标签 → 保存目录' });
     parent.createEl('p', { cls: 'flomo-muted', text: '映射标签根据当前同步范围自动列出，只需选择右侧文件夹。已设置的映射从上到下优先；已有笔记不自动搬动。' });

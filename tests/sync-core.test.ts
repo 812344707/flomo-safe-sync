@@ -20,7 +20,9 @@ import {
   parseTagFolderMappings,
   renderFileName,
   renderYamlTemplate,
+  tagSelectionState,
   updateManagedStatus,
+  updateCascadingTagSelection,
   validateFileNameTemplate,
   validateNoteTemplate,
   validateVaultRelativePath,
@@ -60,6 +62,14 @@ assert.match(validateFileNameTemplate('{{yyyy/MM/dd}}') || '', /不支持/);
 assert.deepEqual(hierarchicalTags(['工作/项目/甲', '生活', '工作', '#工作/项目']), [
   { tag: '工作', depth: 0 }, { tag: '工作/项目', depth: 1 }, { tag: '工作/项目/甲', depth: 2 }, { tag: '生活', depth: 0 },
 ]);
+const tagTree = ['工作', '工作/项目', '工作/项目/甲', '生活'];
+const cascadedTags = updateCascadingTagSelection(tagTree, [], '工作', true);
+assert.deepEqual(cascadedTags, ['工作', '工作/项目', '工作/项目/甲']);
+assert.deepEqual(tagSelectionState(tagTree, cascadedTags, '工作'), { checked: true, indeterminate: false });
+assert.deepEqual(updateCascadingTagSelection(tagTree, cascadedTags, '工作', false), []);
+assert.deepEqual(tagSelectionState(tagTree, ['工作/项目/甲'], '工作'), { checked: false, indeterminate: true });
+assert.deepEqual(updateCascadingTagSelection(tagTree, cascadedTags, '工作/项目', false), ['工作']);
+assert.deepEqual(updateCascadingTagSelection(tagTree, ['生活'], '自定义', true), ['生活', '自定义']);
 
 assert.deepEqual(collectFlomoTags([
   original,

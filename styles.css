@@ -49,6 +49,7 @@
 .flomo-safe-sync-settings .flomo-tag-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
 .flomo-safe-sync-settings .flomo-tag-option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px 3px calc(8px + var(--flomo-tag-depth, 0) * 20px); border-radius: 4px; overflow-wrap: anywhere; }
 .flomo-safe-sync-settings .flomo-tag-option:hover { background: var(--background-modifier-hover); }
+.flomo-safe-sync-settings .flomo-tag-option .flomo-partial-state { color: var(--text-accent); font-size: var(--font-ui-smaller); margin-inline-start: auto; }
 .flomo-safe-sync-settings .flomo-mapping-row .setting-item-info { flex: 1 1 auto; padding-inline-start: calc(var(--flomo-tag-depth, 0) * 16px); }
 .flomo-safe-sync-settings .flomo-mapping-row input { min-width: 220px; width: 320px; max-width: 100%; }
 .flomo-safe-sync-settings .flomo-empty-state { padding: 12px; color: var(--text-muted); border: 1px dashed var(--background-modifier-border); border-radius: 6px; }

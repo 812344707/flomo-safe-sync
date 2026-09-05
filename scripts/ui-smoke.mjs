@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const PORT = 19223;
 const VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
-const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v033';
+const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v034';
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 const page = targets.find(target => target.title.startsWith('设置 - vault')) || targets.find(target => target.type === 'page' && target.url.includes('obsidian.md')) || targets.find(target => target.type === 'page');
 if (!page) throw new Error('Isolated Obsidian page unavailable');
@@ -106,9 +106,19 @@ try {
     assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     const data=JSON.parse(await fs.readFile(`${VAULT}/.obsidian/plugins/flomo-safe-sync/data.json`,'utf8')); assert.equal(data.noteTemplate,note);
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:850,deviceScaleFactor:1,mobile:false});
-    await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app,p=A.plugins.plugins['flomo-safe-sync'];p.settings.scopeMode='include';p.settings.scopeTags=['工作','工作/项目','工作/项目/甲'];p.settings.availableFlomoTags=['工作','工作/项目','工作/项目/甲','生活'];p.settings.tagFolderMappings=[];await p.saveSettings();A.setting.openTabById('flomo-safe-sync');})()`);
+    await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app,p=A.plugins.plugins['flomo-safe-sync'];p.settings.scopeMode='include';p.settings.scopeTags=[];p.settings.availableFlomoTags=['工作','工作/项目','工作/项目/甲','生活'];p.settings.tagFolderMappings=[];await p.saveSettings();A.setting.openTabById('flomo-safe-sync');})()`);
     await clickTab('scope');
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tag-options [role=treeitem]')].map(x=>[x.textContent.trim(),x.getAttribute('aria-level')])`), [['#工作','1'],['#工作/项目','2'],['#工作/项目/甲','3'],['#生活','1']]);
+    await evaluate(`document.querySelector('[aria-label="选择标签 #工作"]').click()`); await new Promise(resolve=>setTimeout(resolve,100));
+    assert.deepEqual(await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.scopeTags`), ['工作','工作/项目','工作/项目/甲']);
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tag-options input')].slice(0,3).map(x=>x.checked)`), [true,true,true]);
+    await evaluate(`document.querySelector('[aria-label="选择标签 #工作/项目"]').click()`); await new Promise(resolve=>setTimeout(resolve,100));
+    assert.deepEqual(await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.scopeTags`), ['工作']);
+    assert.equal(await evaluate(`document.querySelector('[aria-label="选择标签 #工作"]').getAttribute('aria-checked')`), 'mixed');
+    assert.equal(await evaluate(`document.querySelector('[aria-label="选择标签 #工作"]').parentElement.querySelector('.flomo-partial-state').textContent`), '部分选择');
+    await screenshot('scope-partial-light');
+    await evaluate(`document.querySelector('[aria-label="选择标签 #工作"]').click()`); await new Promise(resolve=>setTimeout(resolve,100));
+    assert.deepEqual(await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.scopeTags`), ['工作','工作/项目','工作/项目/甲']);
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-mapping-row .setting-item-name')].map(x=>x.textContent)`), ['#工作','#工作/项目','#工作/项目/甲']);
     assert.ok(await evaluate(`[...document.querySelectorAll('.setting-item-name')].some(x=>x.textContent==='未映射标签的默认位置')`));
     await screenshot('scope-light');
@@ -116,7 +126,7 @@ try {
     await clickTab('connection');
     const compact=await evaluate(`(()=>{const row=[...document.querySelectorAll('.setting-item')].find(x=>x.querySelector('.setting-item-name')?.textContent==='启动时同步'),a=row.querySelector('.setting-item-info').getBoundingClientRect(),b=row.querySelector('.setting-item-control').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<12,rowHeight:row.getBoundingClientRect().height};})()`);
     assert.ok(compact.sameRow);
-    const result={obsidian:'1.13.7',version:'0.3.3',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,automaticMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry};
+    const result={obsidian:'1.13.7',version:'0.3.4',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,cascadingTagSelection:true,partialParentState:true,automaticMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry};
     await fs.writeFile(`${OUTPUT}/ui-results.json`,JSON.stringify(result,null,2)); console.log(result);
 
   }

@@ -30,6 +30,11 @@ export interface HierarchicalTag {
   depth: number;
 }
 
+export interface TagSelectionState {
+  checked: boolean;
+  indeterminate: boolean;
+}
+
 export interface TagFolderParseResult {
   mappings: TagFolderMapping[];
   error?: string;
@@ -123,6 +128,30 @@ export function hierarchicalTags(tags: string[]): HierarchicalTag[] {
   return normalizeTagList(tags)
     .sort((left, right) => left.localeCompare(right, 'zh-CN', { numeric: true }))
     .map(tag => ({ tag, depth: Math.max(0, tag.split('/').length - 1) }));
+}
+
+function tagSubtree(tags: string[], rootTag: string): string[] {
+  const root = normalizeTag(rootTag);
+  if (!root) return [];
+  return hierarchicalTags([...tags, root]).map(item => item.tag)
+    .filter(tag => tag === root || tag.startsWith(`${root}/`));
+}
+
+export function tagSelectionState(allTags: string[], selectedTags: string[], rootTag: string): TagSelectionState {
+  const subtree = tagSubtree(allTags, rootTag);
+  const selected = new Set(normalizeTagList(selectedTags));
+  const selectedCount = subtree.filter(tag => selected.has(tag)).length;
+  return {
+    checked: subtree.length > 0 && selectedCount === subtree.length,
+    indeterminate: selectedCount > 0 && selectedCount < subtree.length,
+  };
+}
+
+export function updateCascadingTagSelection(allTags: string[], selectedTags: string[], rootTag: string, checked: boolean): string[] {
+  const subtree = tagSubtree(allTags, rootTag);
+  const subtreeSet = new Set(subtree);
+  const unrelated = normalizeTagList(selectedTags).filter(tag => !subtreeSet.has(tag));
+  return checked ? [...unrelated, ...subtree] : unrelated;
 }
 
 export function parseTagFolderMappings(value: string): TagFolderParseResult {
