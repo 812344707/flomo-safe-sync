@@ -25,6 +25,11 @@ export interface TagFolderMapping {
   folder: string;
 }
 
+export interface HierarchicalTag {
+  tag: string;
+  depth: number;
+}
+
 export interface TagFolderParseResult {
   mappings: TagFolderMapping[];
   error?: string;
@@ -82,6 +87,12 @@ export function normalizeTagList(tags: string[]): string[] {
     if (tag && !result.includes(tag)) result.push(tag);
   }
   return result;
+}
+
+export function hierarchicalTags(tags: string[]): HierarchicalTag[] {
+  return normalizeTagList(tags)
+    .sort((left, right) => left.localeCompare(right, 'zh-CN', { numeric: true }))
+    .map(tag => ({ tag, depth: Math.max(0, tag.split('/').length - 1) }));
 }
 
 export function parseTagFolderMappings(value: string): TagFolderParseResult {
@@ -148,8 +159,11 @@ export function htmlToMarkdown(html: string, imageMap: Record<string, string> = 
   md = md.replace(/<code>([\s\S]*?)<\/code>/gi, '`$1`');
   md = md.replace(/<a[^>]+href=(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, '[$3]($2)');
   md = md.replace(/<img[^>]+src=(["'])(.*?)\1[^>]*\/?>/gi, (_match, _quote: string, src: string) => {
-    const localPath = imageMap[src];
-    return localPath ? `![[${localPath}]]` : `![](${src})`;
+    const destination = imageMap[src];
+    if (!destination) return `![](${src})`;
+    return /^https?:\/\//i.test(destination)
+      ? `![](&lt;${destination.replace(/&/g, '&amp;').replace(/>/g, '%3E')}&gt;)`
+      : `![[${destination}]]`;
   });
   md = md.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, content: string) => {
     return content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_itemMatch: string, item: string) => {
@@ -191,15 +205,37 @@ function memoTitle(memo: FlomoMemo): string {
   return firstLine || 'flomo';
 }
 
-function dateParts(createdAt: string): { date: string; time: string } {
+interface DateTemplateParts {
+  date: string;
+  time: string;
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  second: string;
+}
+
+function dateParts(createdAt: string): DateTemplateParts {
   const match = createdAt.match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-  if (match) return { date: match[1], time: `${match[2]}-${match[3]}-${match[4]}` };
+  if (match) return {
+    date: match[1], time: `${match[2]}-${match[3]}-${match[4]}`,
+    year: match[1].slice(0, 4), month: match[1].slice(5, 7), day: match[1].slice(8, 10),
+    hour: match[2], minute: match[3], second: match[4],
+  };
   const fallback = new Date(createdAt);
   if (!Number.isNaN(fallback.getTime())) {
     const iso = fallback.toISOString();
-    return { date: iso.slice(0, 10), time: iso.slice(11, 19).replace(/:/g, '-') };
+    return {
+      date: iso.slice(0, 10), time: iso.slice(11, 19).replace(/:/g, '-'),
+      year: iso.slice(0, 4), month: iso.slice(5, 7), day: iso.slice(8, 10),
+      hour: iso.slice(11, 13), minute: iso.slice(14, 16), second: iso.slice(17, 19),
+    };
   }
-  return { date: 'unknown-date', time: 'unknown-time' };
+  return {
+    date: 'unknown-date', time: 'unknown-time', year: 'unknown-year', month: 'unknown-month',
+    day: 'unknown-day', hour: 'unknown-hour', minute: 'unknown-minute', second: 'unknown-second',
+  };
 }
 
 function compactDateTime(createdAt: string): string {
@@ -211,7 +247,7 @@ function compactDateTime(createdAt: string): string {
 function validateTemplateVariables(template: string, label: string): string | null {
   const tokens = template.match(/{{[^}]+}}/g) || [];
   for (const token of tokens) {
-    if (!/^{{(?:date|time|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)}}$/.test(token)) {
+    if (!/^{{(?:date|time|year|month|day|hour|minute|second|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)}}$/.test(token)) {
       return `不支持的${label}变量：${token}`;
     }
   }
@@ -229,13 +265,12 @@ export function renderFileName(template: string, memo: FlomoMemo): string {
   const error = validateFileNameTemplate(template);
   if (error) throw new Error(error);
 
-  const { date, time } = dateParts(memo.created_at);
+  const parts = dateParts(memo.created_at);
   const title = memoTitle(memo);
   const firstTag = extractTags(memo)[0] || 'untagged';
-  const rendered = template.replace(/{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
+  const rendered = template.replace(/{{(YYYY-MM-DD-HHmmss|date|time|year|month|day|hour|minute|second|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
     const values: Record<string, string> = {
-      date,
-      time,
+      ...parts,
       'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
       first_tag: firstTag,
       title,
@@ -287,10 +322,9 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
   const error = validateYamlTemplate(template);
   if (error) throw new Error(error);
   if (!template.trim()) return '';
-  const { date, time } = dateParts(memo.created_at);
+  const parts = dateParts(memo.created_at);
   const values: Record<string, string> = {
-    date,
-    time,
+    ...parts,
     'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
     first_tag: extractTags(memo)[0] || 'untagged',
     title: memoTitle(memo),
@@ -301,7 +335,7 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
     const replacements: string[] = [];
     let sentinel = 'FLOMO_TEMPLATE_SLOT_';
     while (line.includes(sentinel)) sentinel += '_';
-    const skeleton = line.replace(/{{(YYYY-MM-DD-HHmmss|date|time|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
+    const skeleton = line.replace(/{{(YYYY-MM-DD-HHmmss|date|time|year|month|day|hour|minute|second|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
       const raw = values[key] || '';
       replacements.push(length ? raw.slice(0, Math.max(1, Number.parseInt(length, 10))) : raw);
       return `${sentinel}${replacements.length - 1}_END`;
@@ -347,7 +381,10 @@ export function collectFlomoTags(memos: FlomoMemo[]): string[] {
 export function computeDesiredPaths(memo: FlomoMemo, settings: PathSettings): string[] {
   if (!tagsInScope(extractTags(memo), settings)) return [];
   const fileName = `${renderFileName(settings.fileNameTemplate, memo)}.md`;
-  const mapping = findTagFolderMapping(memo, settings.tagFolderMappings);
+  const scopeTags = new Set(normalizeTagList(settings.scopeTags ?? settings.tagFolderMappings.map(mapping => mapping.tag)));
+  const eligibleMappings = settings.tagFolderMappings.filter(mapping =>
+    settings.scopeMode === 'exclude' ? !scopeTags.has(normalizeTag(mapping.tag)) : scopeTags.has(normalizeTag(mapping.tag)));
+  const mapping = findTagFolderMapping(memo, eligibleMappings);
   if (mapping) return [joinVaultPath(mapping.folder, fileName)];
   return settings.rootFolder ? [joinVaultPath(normalizeVaultPath(settings.rootFolder), fileName)] : [];
 }
@@ -696,6 +733,26 @@ export function updateManagedStatus(
 
 export function hasManagedMarkers(content: string, expectedSlug?: string): boolean {
   return inspectManagedMemo(content, expectedSlug).ok;
+}
+
+/**
+ * Returns image and wiki-embed destinations from the managed body in display order.
+ * Image-host uploaders normally replace a local embed in place, so the order
+ * lets sync retain that replacement without inspecting the user's free-text area.
+ */
+export function extractManagedBodyEmbedTargets(content: string, expectedSlug?: string): string[] {
+  const inspection = inspectManagedMemo(content, expectedSlug);
+  if (!inspection.ok) return [];
+  const body = content.slice(inspection.body.start, inspection.body.end);
+  const matches: Array<{ index: number; target: string }> = [];
+  const wiki = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+  const markdown = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/g;
+  const html = /<img[^>]+src=(["'])(.*?)\1[^>]*\/?>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = wiki.exec(body)) !== null) matches.push({ index: match.index, target: match[1].trim() });
+  while ((match = markdown.exec(body)) !== null) matches.push({ index: match.index, target: (match[1] || match[2] || '').trim() });
+  while ((match = html.exec(body)) !== null) matches.push({ index: match.index, target: (match[2] || '').trim() });
+  return matches.sort((left, right) => left.index - right.index).map(item => item.target).filter(Boolean);
 }
 
 export function extractImageSources(html: string): string[] {

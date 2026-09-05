@@ -4,10 +4,12 @@ import {
   buildNewMemoFile,
   collectFlomoTags,
   computeDesiredPaths,
+  extractManagedBodyEmbedTargets,
   extractYamlTags,
   findTagFolderMapping,
   findTagFolderMappingForTags,
   hasManagedMarkers,
+  hierarchicalTags,
   mergeManagedMemo,
   memoMatchesExcludedTags,
   parseTagFolderMappings,
@@ -40,7 +42,11 @@ assert.deepEqual(mappedPaths, ['20-写作素材/2026-09-01_08-09-10_第一条写
 
 assert.equal(validateFileNameTemplate('{{YYYY-MM-DD-HHmmss}}'), null);
 assert.equal(renderFileName('{{YYYY-MM-DD-HHmmss}}', original), '2026-09-01-080910');
+assert.equal(renderFileName('{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}', original), '20260901_080910');
 assert.match(validateFileNameTemplate('{{YYYYMMDD}}') || '', /不支持/);
+assert.deepEqual(hierarchicalTags(['工作/项目/甲', '生活', '工作', '#工作/项目']), [
+  { tag: '工作', depth: 0 }, { tag: '工作/项目', depth: 1 }, { tag: '工作/项目/甲', depth: 2 }, { tag: '生活', depth: 0 },
+]);
 
 assert.deepEqual(collectFlomoTags([
   original,
@@ -73,8 +79,8 @@ assert.match(validateYamlTemplate('tags: [写作]') || '', /由插件维护/);
 assert.match(validateYamlTemplate('flomo_status: active') || '', /由插件维护/);
 assert.match(validateYamlTemplate('  - 不支持的多行值') || '', /顶层 YAML 字段/);
 assert.equal(
-  renderYamlTemplate('source: flomo\ncreated: "{{date}}"\ntitle: "{{title:4}}"', original),
-  'source: flomo\ncreated: "2026-09-01"\ntitle: "第一条写"',
+  renderYamlTemplate('source: flomo\ncreated: "{{date}} {{hour}}:{{minute}}:{{second}}"\ntitle: "{{title:4}}"', original),
+  'source: flomo\ncreated: "2026-09-01 08:09:10"\ntitle: "第一条写"',
 );
 
 const unmappedPaths = computeDesiredPaths(
@@ -90,6 +96,12 @@ const created = buildNewMemoFile(original, {
 });
 assert.equal(hasManagedMarkers(created), true);
 assert.match(created, /!\[\[00-Flomo收件箱\/_attachments\/a\.jpg\]\]/);
+assert.deepEqual(extractManagedBodyEmbedTargets(created, original.slug), ['00-Flomo收件箱/_attachments/a.jpg']);
+const hosted = buildNewMemoFile(original, {
+  syncedAt: '2026-09-01T08:10:00.000Z', imageMap: { 'https://img.example/a.jpg': 'https://cdn.example/a.jpg' },
+});
+assert.match(hosted, /!\[\]\(<https:\/\/cdn\.example\/a\.jpg>\)/);
+assert.deepEqual(extractManagedBodyEmbedTargets(hosted, original.slug), ['https://cdn.example/a.jpg']);
 assert.deepEqual(extractYamlTags(created), ['写作', '素材']);
 assert.doesNotMatch(created, /flomo_tags:/);
 assert.doesNotMatch(created, /#写作 #素材/);

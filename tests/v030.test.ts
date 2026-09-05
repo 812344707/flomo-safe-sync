@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert';
 import FlomoSafeSyncPlugin from '../main';
-import { DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
+import { CURRENT_SETTINGS_VERSION, DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
 import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateYamlTemplate } from '../sync-core';
 import { App, MemoryAdapter, clearMockObservations, getMockState, parseYaml, resetObsidianMock, setLoadedData, setMockMemos, setMockResponses } from './obsidian-mock';
 
@@ -17,7 +17,7 @@ async function harness(overrides: Partial<FlomoSafeSyncSettings> = {}, existing 
   resetObsidianMock();
   const adapter = new MemoryAdapter(existing ? { [path]: originalNote, 'Images/retained.png': 'retained binary' } : {});
   const app = new App(adapter);
-  const plugin = new FlomoSafeSyncPlugin(app as unknown as ConstructorParameters<typeof FlomoSafeSyncPlugin>[0], { id: 'test', name: 'test', version: '0.3.0', minAppVersion: '1.2.3', author: 'test', description: 'test' });
+  const plugin = new FlomoSafeSyncPlugin(app as unknown as ConstructorParameters<typeof FlomoSafeSyncPlugin>[0], { id: 'test', name: 'test', version: '0.3.1', minAppVersion: '1.2.3', author: 'test', description: 'test' });
   await plugin.loadSettings();
   Object.assign(plugin.settings, { bearerToken: 'v030-fake-token', rootFolder: 'Inbox', imageFolder: 'Images', scopeMode: 'exclude', scopeTags: [], localizeImages: false,
     syncedMemos: existing ? { [memo.slug]: { updated_at: memo.updated_at, bodyUpdatedAt: memo.updated_at, propertiesUpdatedAt: memo.updated_at,
@@ -42,6 +42,17 @@ test('v0.2 migration preserves include scope, custom template and history; runs 
   assert.equal(old.tagFolderMappings[0].tag, '#写作');
 });
 test('default settings never share arrays or records', () => { const a = migrateSettings(), b = migrateSettings(); a.scopeTags.push('a'); assert.deepEqual(b.scopeTags, []); });
+test('v3 to v4 migration preserves saved values and unknown extension data', () => {
+  const saved = {
+    settingsVersion: 3, localizeImages: false, autoSyncIntervalMinutes: 0, scopeTags: [], tagFolderMappings: [],
+    futureExtension: { enabled: false, values: [] }, syncedMemos: { a: { updated_at: memo.updated_at, fileName: 'a', filePaths: ['A/a.md'] } },
+  };
+  const migrated = migrateSettings(saved as unknown as Partial<FlomoSafeSyncSettings>);
+  assert.equal(migrated.settingsVersion, CURRENT_SETTINGS_VERSION); assert.equal(migrated.localizeImages, false);
+  assert.equal(migrated.autoSyncIntervalMinutes, 0); assert.deepEqual(migrated.scopeTags, []);
+  assert.deepEqual((migrated as unknown as typeof saved).futureExtension, saved.futureExtension);
+  assert.deepEqual(migrated.syncedMemos, saved.syncedMemos);
+});
 test('loading current settings preserves every saved value and unknown extension data', () => {
   const saved = migrateSettings({
     bearerToken: 'saved-token', rootFolder: 'My Inbox', fileNameTemplate: '{{slug}}',
@@ -70,6 +81,12 @@ test('scope empty selections, tagless memos, exact matching and first route', ()
   assert.ok(computeDesiredPaths({ ...memo, tags: [{ name: '素材' }, { name: '写作' }] }, settings)[0].startsWith('First/'));
   settings.scopeTags = []; assert.deepEqual(computeDesiredPaths(memo, settings), []);
   settings.scopeMode = 'exclude'; assert.ok(computeDesiredPaths({ ...memo, tags: [] }, settings)[0].startsWith('Inbox/'));
+});
+test('include routing ignores stale mappings outside the selected scope', () => {
+  const settings = migrateSettings({ scopeMode: 'include', scopeTags: ['写作'], rootFolder: 'Inbox', tagFolderMappings: [
+    { tag: '素材', folder: 'Stale' }, { tag: '写作', folder: 'Writing' },
+  ] });
+  assert.ok(computeDesiredPaths({ ...memo, tags: [{ name: '素材' }, { name: '写作' }] }, settings)[0].startsWith('Writing/'));
 });
 test('leaving scope retains file, re-entering catches up and never counts as remote deletion', async () => {
   const h = await harness({ scopeMode: 'include', scopeTags: ['写作'] }); await sync(h, [updated]); unchanged(h);
@@ -198,6 +215,28 @@ test('new imports use configured image directory, no localization still includes
   await sync(h, [{ ...memo, files: [{ url: 'https://img.example/a.png', name: 'a.png' }] }]); assert.ok(h.adapter.binaryWrites[0].startsWith('CustomImages/memo-001/'));
   const disabled = await harness({}, false); await sync(disabled, [{ ...memo, files: [{ url: 'https://img.example/a.png', name: 'a.png' }] }]); assert.match(disabled.adapter.files.get(record(disabled).filePaths[0])!, /https:\/\/img.example\/a.png/);
 });
+test('an image-host replacement is retained and never downloaded again, including after reload', async () => {
+  const h = await harness({ localizeImages: true }); h.adapter.allowBinary = true;
+  const source = 'https://img.example/a.png', hosted = 'https://cdn.example/uploaded/a.png';
+  const first = { ...updated, content: `<p>第一次更新</p><img src="${source}">` };
+  await sync(h, [first]);
+  const localPath = record(h).assetMap?.[source]; assert.ok(localPath && !localPath.startsWith('http'));
+  const uploadedNote = h.adapter.files.get(path)!.replace(`![[${localPath}]]`, `![](${hosted})`);
+  h.adapter.files.set(path, uploadedNote); h.adapter.files.delete(localPath!);
+  delete record(h).assetMap; // Simulate upgrading a v0.3 note after its uploader replaced the embed.
+  const writesBefore = h.adapter.binaryWrites.length;
+  await sync(h, [{ ...first, content: `<p>第二次更新</p><img src="${source}">`, updated_at: '2026-09-03 10:00:00' }]);
+  assert.equal(h.adapter.binaryWrites.length, writesBefore); assert.match(h.adapter.files.get(path)!, /https:\/\/cdn\.example\/uploaded\/a\.png/);
+  assert.equal(record(h).assetMap?.[source], hosted);
+  await reload(h);
+  const added = 'https://img.example/b.png';
+  await sync(h, [{ ...first, content: `<p>第三次更新</p><img src="${added}"><img src="${source}">`, updated_at: '2026-09-04 10:00:00' }]);
+  assert.equal(h.adapter.binaryWrites.length, writesBefore + 1); assert.equal(record(h).assetMap?.[source], hosted);
+  assert.ok(record(h).assetMap?.[added]?.startsWith('OldImages/memo-001/'));
+  const afterAdded = h.adapter.binaryWrites.length;
+  await sync(h, [{ ...first, content: `<p>第四次更新</p><img src="${added}"><img src="${source}">`, updated_at: '2026-09-05 10:00:00' }]);
+  assert.equal(h.adapter.binaryWrites.length, afterAdded); assert.match(h.adapter.files.get(path)!, /https:\/\/cdn\.example\/uploaded\/a\.png/);
+});
 test('YAML variables safely handle quotes, colons, newlines and arrays', () => {
   const special = { ...memo, tags: [{ name: 'a: "quoted"\nnext' }] };
   for (const value of ['{{first_tag}}', '"{{first_tag}}"', "'{{first_tag}}'"]) {
@@ -217,5 +256,5 @@ test('quoted YAML keys with colons render safely, while variables in keys are re
   const warn = console.warn; console.warn = () => {};
   try { for (const entry of cases) { try { await entry.run(); } catch (error) { throw new Error(`${entry.name}\n${(error as Error).stack}`); } } }
   finally { console.warn = warn; }
-  console.log(`v0.3.0 tests passed (${cases.length} cases; mocked API and in-memory vault)`);
+  console.log(`v0.3.x tests passed (${cases.length} cases; mocked API and in-memory vault)`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

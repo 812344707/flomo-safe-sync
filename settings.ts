@@ -1,7 +1,7 @@
 import { ExcludedPolicy, TagFolderMapping, UpdateMode, normalizeTagList } from './sync-core';
 
 export const DEFAULT_FILE_NAME = '{{date}}_{{time}}_{{title:20}}_{{slug:8}}';
-export const CURRENT_SETTINGS_VERSION = 3;
+export const CURRENT_SETTINGS_VERSION = 4;
 export type DeletionAction = 'keep' | 'mark' | 'archive' | 'trash';
 export interface FileState {
   path: string;
@@ -20,6 +20,8 @@ export interface SyncedMemoRecord {
   lastAppliedFlomoTags?: string[];
   tagsMerged?: boolean;
   assetFolder?: string;
+  /** Original Flomo asset URL -> current local path or image-host URL. */
+  assetMap?: Record<string, string>;
   deletedDetectedAt?: string;
   bodyUpdatedAt?: string;
   propertiesUpdatedAt?: string;
@@ -76,7 +78,14 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
     return settings;
   }
 
-  // v0.1/v0.2 -> v0.3: copy every old value, then derive only fields that did
+  // v3 -> v4 only adds optional per-memo asset identity. Preserve every saved
+  // value exactly; records learn asset mappings during later successful syncs.
+  if (sourceVersion >= 3) {
+    settings.settingsVersion = CURRENT_SETTINGS_VERSION;
+    return settings;
+  }
+
+  // v0.1/v0.2 -> current: copy every old value, then derive only fields that did
   // not exist in the older schema.
   settings.rootFolder = loaded.rootFolder || loaded.flomoFolder || DEFAULT_SETTINGS.rootFolder;
   settings.tagFolderMappings = (loaded.tagFolderMappings || []).map(m => ({ tag: normalizeTagList([m.tag])[0] || '', folder: m.folder })).filter(m => m.tag);

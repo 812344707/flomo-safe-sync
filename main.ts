@@ -132,6 +132,12 @@ export default class FlomoSafeSyncPlugin extends Plugin {
         if (path !== file.path) { file.path = path; changed = true; }
       }
       if (record.assetFolder && replace(record.assetFolder) !== record.assetFolder) { record.assetFolder = replace(record.assetFolder); changed = true; }
+      if (record.assetMap) {
+        for (const [source, destination] of Object.entries(record.assetMap)) {
+          const next = replace(destination);
+          if (next !== destination) { record.assetMap[source] = next; changed = true; }
+        }
+      }
     }
     if (changed) await this.saveSettings();
   }

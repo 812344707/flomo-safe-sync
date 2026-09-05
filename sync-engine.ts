@@ -1,6 +1,6 @@
 import { App, TFile, requestUrl } from 'obsidian';
 import { createHash } from 'crypto';
-import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractImageSources, extractTags,
+import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractImageSources, extractManagedBodyEmbedTargets, extractTags,
   fileNameFromUrl, hasManagedMarkers, mergeManagedMemo, memoMatchesExcludedTags,
   normalizeVaultPath, renderFileName, sanitizePathSegment, tagsInScope, updateManagedStatus,
   validateFileNameTemplate, validateVaultRelativePath, validateYamlTemplate } from './sync-core';
@@ -11,7 +11,12 @@ export interface SyncResult {
   unmappedCount: number; deletedMarkedCount: number; archivedCount: number; pendingTrashCount: number;
   conflictCount: number; assetErrorCount: number; errors: string[];
 }
-interface AssetResult { imageMap: Record<string, string>; attachmentPaths: string[]; errorCount: number; }
+interface AssetResult {
+  imageMap: Record<string, string>;
+  attachmentPaths: string[];
+  assetMap: Record<string, string>;
+  errorCount: number;
+}
 
 async function ensureDir(app: App, dirPath: string): Promise<void> {
   const normalized = normalizeVaultPath(dirPath);
@@ -72,23 +77,54 @@ async function localizeMemoAssets(
   assetFolder: string,
   token: string,
   enabled: boolean,
+  previousAssetMap: Record<string, string> = {},
+  currentManagedTargets: string[] = [],
 ): Promise<AssetResult> {
-  if (!enabled) return { imageMap: {}, attachmentPaths: (memo.files || []).map(file => file.url), errorCount: 0 };
-  const sources = [...extractImageSources(memo.content)];
+  if (!enabled) return {
+    imageMap: {}, attachmentPaths: (memo.files || []).map(file => file.url),
+    assetMap: { ...previousAssetMap }, errorCount: 0,
+  };
+  const inlineSources = extractImageSources(memo.content);
+  const sources = [...inlineSources];
   for (const file of memo.files || []) {
     if (file.url && !sources.includes(file.url)) sources.push(file.url);
   }
-  if (sources.length === 0) return { imageMap: {}, attachmentPaths: [], errorCount: 0 };
+  if (sources.length === 0) return { imageMap: {}, attachmentPaths: [], assetMap: {}, errorCount: 0 };
 
   await ensureDir(app, assetFolder);
   const imageMap: Record<string, string> = {};
   const attachmentPaths: string[] = [];
+  const assetMap: Record<string, string> = {};
+  const previousSources = Object.keys(previousAssetMap);
+  const canInferMigratedOrder = previousSources.length === 0 && currentManagedTargets.length === sources.length;
   let errorCount = 0;
   for (let index = 0; index < sources.length; index++) {
     const source = sources[index];
+    const previousDestination = previousAssetMap[source];
+    const previousIndex = previousSources.indexOf(source);
+    const currentIndex = previousIndex >= 0 ? previousIndex : canInferMigratedOrder ? index : -1;
+    const currentDestination = currentIndex >= 0 ? currentManagedTargets[currentIndex] : undefined;
+    const hostedReplacement = currentDestination
+      && /^https?:\/\//i.test(currentDestination) && currentDestination !== source
+      ? currentDestination
+      : undefined;
+    if (hostedReplacement) {
+      imageMap[source] = hostedReplacement;
+      assetMap[source] = hostedReplacement;
+      attachmentPaths.push(hostedReplacement);
+      continue;
+    }
+    if (previousDestination && /^https?:\/\//i.test(previousDestination) && previousDestination !== source) {
+      imageMap[source] = previousDestination;
+      assetMap[source] = previousDestination;
+      attachmentPaths.push(previousDestination);
+      continue;
+    }
     const namedFile = (memo.files || []).find(file => file.url === source)?.name;
     const rawName = namedFile ? sanitizePathSegment(namedFile) : fileNameFromUrl(source, index + 1);
-    const target = `${assetFolder}/${createHash('sha256').update(source).digest('hex').slice(0, 12)}-${rawName}`;
+    const target = previousDestination && !/^https?:\/\//i.test(previousDestination)
+      ? previousDestination
+      : `${assetFolder}/${createHash('sha256').update(source).digest('hex').slice(0, 12)}-${rawName}`;
     try {
       if (!(await app.vault.adapter.exists(target))) {
         const response = await requestUrl({
@@ -99,14 +135,16 @@ async function localizeMemoAssets(
         await app.vault.adapter.writeBinary(target, response.arrayBuffer);
       }
       imageMap[source] = target;
+      assetMap[source] = target;
       attachmentPaths.push(target);
     } catch (error) {
       errorCount++;
+      assetMap[source] = source;
       attachmentPaths.push(source);
       console.warn(`[Flomo Safe Sync] Failed to download attachment: ${source}`, error);
     }
   }
-  return { imageMap, attachmentPaths, errorCount };
+  return { imageMap, attachmentPaths, assetMap, errorCount };
 }
 
 export function validateSettings(settings: FlomoSafeSyncSettings): void {
@@ -256,6 +294,7 @@ async function createMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
     updated_at: memo.updated_at, bodyUpdatedAt: memo.updated_at, propertiesUpdatedAt: memo.updated_at,
     fileName: renderFileName(settings.fileNameTemplate, memo), filePaths: paths, status: 'active', excluded,
     lastKnownTags: extractTags(memo), lastAppliedFlomoTags: extractTags(memo), tagsMerged: true, assetFolder,
+    assetMap: assets.assetMap,
   } };
 }
 
@@ -269,13 +308,20 @@ async function updateMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
   const effectiveMode = body && properties ? 'both' : body ? 'body' : 'properties';
   const paths = fileStates(record).map(file => file.path);
   // Validate every destination before doing any note or attachment write for this memo.
+  const ownedContents: string[] = [];
   for (const path of paths) {
     const current = await readOwned(app, path, memo.slug);
+    ownedContents.push(current);
     const preflight = mergeManagedMemo(current, memo, { syncedAt: new Date().toISOString(), updateMode: effectiveMode, previousFlomoTags: record.lastAppliedFlomoTags || record.lastKnownTags });
     if (!preflight.ok) throw new Error(`${path}：${preflight.reason}`);
   }
   const assetFolder = record.assetFolder || `${normalizeVaultPath(settings.imageFolder)}/${sanitizePathSegment(memo.slug)}`;
-  const assets = body ? await localizeMemoAssets(app, memo, assetFolder, token, settings.localizeImages) : { imageMap: {}, attachmentPaths: [], errorCount: 0 };
+  const assets = body
+    ? await localizeMemoAssets(
+      app, memo, assetFolder, token, settings.localizeImages, record.assetMap || {},
+      extractManagedBodyEmbedTargets(ownedContents[0], memo.slug),
+    )
+    : { imageMap: {}, attachmentPaths: [], assetMap: record.assetMap || {}, errorCount: 0 };
   for (const path of paths) {
     const file = app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`${path}：文件未加载，请重试`);
@@ -289,7 +335,11 @@ async function updateMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
       return merged.content;
     });
   }
-  if (body) { record.bodyUpdatedAt = memo.updated_at; record.assetFolder = assetFolder; }
+  if (body) {
+    record.bodyUpdatedAt = memo.updated_at;
+    record.assetFolder = assetFolder;
+    record.assetMap = assets.assetMap;
+  }
   if (properties) { record.propertiesUpdatedAt = memo.updated_at; record.lastAppliedFlomoTags = extractTags(memo); record.tagsMerged = true; }
   record.updated_at = memo.updated_at;
   return { changed: true, errors: assets.errorCount };
