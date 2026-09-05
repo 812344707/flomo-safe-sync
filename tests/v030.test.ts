@@ -42,6 +42,28 @@ test('v0.2 migration preserves include scope, custom template and history; runs 
   assert.equal(old.tagFolderMappings[0].tag, '#写作');
 });
 test('default settings never share arrays or records', () => { const a = migrateSettings(), b = migrateSettings(); a.scopeTags.push('a'); assert.deepEqual(b.scopeTags, []); });
+test('loading current settings preserves every saved value and unknown extension data', () => {
+  const saved = migrateSettings({
+    bearerToken: 'saved-token', rootFolder: 'My Inbox', fileNameTemplate: '{{slug}}',
+    fileNameMode: 'custom', customFileNameTemplate: '{{slug}}', yamlTemplate: '',
+    scopeMode: 'exclude', scopeTags: [], tagFolderMappings: [], availableFlomoTags: [],
+    excludedTags: [], excludedPolicy: 'skip', imageFolder: 'My Images', localizeImages: false,
+    updateMode: 'new-only', deletionAction: 'keep', archiveFolder: 'My Archive',
+    autoSyncOnStartup: false, autoSyncIntervalMinutes: 0, lastSyncTime: 123,
+    syncedMemos: {}, settingsVersion: 3,
+  });
+  const withFutureExtension = { ...saved, futureExtension: { enabled: false, values: [] } };
+  assert.deepEqual(migrateSettings(withFutureExtension), withFutureExtension);
+});
+test('loading a current schema only fills a missing newly introduced key', () => {
+  const saved = migrateSettings({ settingsVersion: 3, localizeImages: false, autoSyncIntervalMinutes: 0 });
+  const withoutArchive = { ...saved } as Partial<FlomoSafeSyncSettings>;
+  delete withoutArchive.archiveFolder;
+  const loaded = migrateSettings(withoutArchive);
+  assert.equal(loaded.archiveFolder, 'Flomo归档');
+  assert.equal(loaded.localizeImages, false);
+  assert.equal(loaded.autoSyncIntervalMinutes, 0);
+});
 test('scope empty selections, tagless memos, exact matching and first route', () => {
   const settings = migrateSettings({ scopeTags: ['写作'], tagFolderMappings: [{ tag: '写作', folder: 'First' }, { tag: '素材', folder: 'Second' }], rootFolder: 'Inbox' });
   assert.equal(tagsInScope(['写作/归档'], settings), false); assert.equal(tagsInScope([], settings), false);

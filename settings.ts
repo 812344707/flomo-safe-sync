@@ -1,6 +1,7 @@
 import { ExcludedPolicy, TagFolderMapping, UpdateMode, normalizeTagList } from './sync-core';
 
 export const DEFAULT_FILE_NAME = '{{date}}_{{time}}_{{title:20}}_{{slug:8}}';
+export const CURRENT_SETTINGS_VERSION = 3;
 export type DeletionAction = 'keep' | 'mark' | 'archive' | 'trash';
 export interface FileState {
   path: string;
@@ -50,7 +51,7 @@ export interface FlomoSafeSyncSettings {
   syncedMemos: Record<string, SyncedMemoRecord>;
 }
 export const DEFAULT_SETTINGS: FlomoSafeSyncSettings = {
-  settingsVersion: 3, bearerToken: '', rootFolder: '00-Flomo收件箱',
+  settingsVersion: CURRENT_SETTINGS_VERSION, bearerToken: '', rootFolder: '00-Flomo收件箱',
   fileNameMode: 'default', fileNameTemplate: DEFAULT_FILE_NAME, customFileNameTemplate: DEFAULT_FILE_NAME,
   yamlTemplate: '', scopeMode: 'include', scopeTags: [], tagFolderMappings: [], availableFlomoTags: [],
   excludedTags: [], excludedPolicy: 'freeze', imageFolder: '00-Flomo收件箱/_attachments/flomo',
@@ -58,10 +59,25 @@ export const DEFAULT_SETTINGS: FlomoSafeSyncSettings = {
   autoSyncOnStartup: false, autoSyncIntervalMinutes: 60, lastSyncTime: 0, syncedMemos: {},
 };
 
-/** Pure, idempotent migration; never share mutable defaults across plugin instances. */
+/**
+ * Upgrade policy: saved v3 settings are the source of truth. New defaults only
+ * fill missing keys; versioned migrations may transform older schemas after a
+ * deep copy. Unknown keys survive so a newer plugin is not damaged by loading.
+ */
 export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoFolder?: string } = {}): FlomoSafeSyncSettings {
   const loaded = JSON.parse(JSON.stringify(input || {})) as typeof input;
   const settings = { ...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), ...loaded } as FlomoSafeSyncSettings;
+  const sourceVersion = typeof loaded.settingsVersion === 'number' ? loaded.settingsVersion : 0;
+
+  // A current or newer schema is never normalized or rewritten during load.
+  // Object spread above only supplies settings introduced after it was saved.
+  if (sourceVersion >= CURRENT_SETTINGS_VERSION) {
+    settings.settingsVersion = sourceVersion;
+    return settings;
+  }
+
+  // v0.1/v0.2 -> v0.3: copy every old value, then derive only fields that did
+  // not exist in the older schema.
   settings.rootFolder = loaded.rootFolder || loaded.flomoFolder || DEFAULT_SETTINGS.rootFolder;
   settings.tagFolderMappings = (loaded.tagFolderMappings || []).map(m => ({ tag: normalizeTagList([m.tag])[0] || '', folder: m.folder })).filter(m => m.tag);
   settings.scopeMode = loaded.scopeMode === 'exclude' ? 'exclude' : 'include';
@@ -83,11 +99,9 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
     record.lastKnownTags = normalizeTagList(record.lastKnownTags || []);
     if (record.lastAppliedFlomoTags) record.lastAppliedFlomoTags = normalizeTagList(record.lastAppliedFlomoTags);
     // A v0.2 record's updated_at represents both successfully applied regions.
-    if (!loaded.settingsVersion || loaded.settingsVersion < 3) {
-      record.bodyUpdatedAt = record.updated_at;
-      record.propertiesUpdatedAt = record.tagsMerged ? record.updated_at : undefined;
-    }
+    record.bodyUpdatedAt = record.updated_at;
+    record.propertiesUpdatedAt = record.tagsMerged ? record.updated_at : undefined;
   }
-  settings.settingsVersion = 3;
+  settings.settingsVersion = CURRENT_SETTINGS_VERSION;
   return settings;
 }
