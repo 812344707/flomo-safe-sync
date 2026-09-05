@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractImageSources, extractManagedBodyEmbedTargets, extractTags,
   fileNameFromUrl, hasManagedMarkers, mergeManagedMemo, memoMatchesExcludedTags,
   normalizeVaultPath, renderFileName, sanitizePathSegment, tagsInScope, updateManagedStatus,
-  validateFileNameTemplate, validateVaultRelativePath, validateYamlTemplate } from './sync-core';
+  validateFileNameTemplate, validateNoteTemplate, validateVaultRelativePath } from './sync-core';
 import { FileState, FlomoSafeSyncSettings, SyncedMemoRecord } from './settings';
 
 export interface SyncResult {
@@ -152,7 +152,7 @@ export function validateSettings(settings: FlomoSafeSyncSettings): void {
     const error = validateVaultRelativePath(path);
     if (error) throw new Error(`${label}无效：${error}`);
   }
-  for (const error of [validateFileNameTemplate(settings.fileNameTemplate), validateYamlTemplate(settings.yamlTemplate)]) if (error) throw new Error(error);
+  for (const error of [validateFileNameTemplate(settings.fileNameTemplate), validateNoteTemplate(settings.noteTemplate)]) if (error) throw new Error(error);
   for (const mapping of settings.tagFolderMappings) {
     if (!mapping.tag.trim() || validateVaultRelativePath(mapping.folder)) throw new Error('标签目录映射无效');
   }
@@ -283,7 +283,7 @@ async function applyDeletion(app: App, settings: FlomoSafeSyncSettings, slug: st
 }
 
 async function createMemo(app: App, settings: FlomoSafeSyncSettings, memo: FlomoMemo, token: string, excluded: boolean): Promise<{ record: SyncedMemoRecord; errors: number }> {
-  const options = { syncedAt: new Date().toISOString(), syncPolicy: excluded ? 'excluded' as const : 'managed' as const, yamlTemplate: settings.yamlTemplate };
+  const options = { syncedAt: new Date().toISOString(), syncPolicy: excluded ? 'excluded' as const : 'managed' as const, noteTemplate: settings.noteTemplate };
   buildNewMemoFile(memo, options); // Validate generated ownership/markers before downloading assets.
   const paths = await resolveUniquePaths(app, computeDesiredPaths(memo, settings), memo.slug, settings);
   const assetFolder = `${normalizeVaultPath(settings.imageFolder)}/${sanitizePathSegment(memo.slug)}`;

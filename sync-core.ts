@@ -52,6 +52,8 @@ export interface ManagedRenderOptions {
   imageMap?: Record<string, string>;
   extraAttachmentPaths?: string[];
   previousFlomoTags?: string[];
+  noteTemplate?: string;
+  /** Legacy v0.3.1 YAML-only template; used only while migrating old callers. */
   yamlTemplate?: string;
 }
 
@@ -65,6 +67,34 @@ export const FRONTMATTER_START = '# flomo-sync:frontmatter:start';
 export const FRONTMATTER_END = '# flomo-sync:frontmatter:end';
 export const BODY_START = '<!-- flomo-sync:content:start -->';
 export const BODY_END = '<!-- flomo-sync:content:end -->';
+export const NOTE_TAGS_TOKEN = '{{flomo_tags}}';
+export const NOTE_CONTENT_TOKEN = '{{flomo_content}}';
+export const NOTE_MANAGED_PROPERTIES_TEMPLATE = `${FRONTMATTER_START}
+flomo_slug: "{{slug}}"
+flomo_status: active
+flomo_sync_policy: managed
+flomo_created_at: "{{created_at}}"
+flomo_updated_at: "{{updated_at}}"
+flomo_last_synced_at: "{{synced_at}}"
+${FRONTMATTER_END}`;
+
+export function createNoteTemplateFromYaml(yamlTemplate = ''): string {
+  const yaml = yamlTemplate.trim();
+  return `---
+${NOTE_MANAGED_PROPERTIES_TEMPLATE}
+${NOTE_TAGS_TOKEN}${yaml ? `\n${yaml}` : ''}
+---
+
+${BODY_START}
+${NOTE_CONTENT_TOKEN}
+${BODY_END}
+
+## 我的补充
+
+`;
+}
+
+export const DEFAULT_NOTE_TEMPLATE = createNoteTemplateFromYaml();
 
 export function normalizeTag(tag: string): string {
   return tag.trim().replace(/^#/, '').replace(/\/+$/g, '');
@@ -244,10 +274,56 @@ function compactDateTime(createdAt: string): string {
   return `${date}-${time.replace(/-/g, '')}`;
 }
 
+const DATE_FORMAT_PARTS = /yyyy|yy|MM|M|dd|d|HH|H|mm|m|ss|s/g;
+
+function isDateFormatExpression(value: string): boolean {
+  if (!/(?:yyyy|yy|MM|M|dd|d|HH|H|mm|m|ss|s)/.test(value)) return false;
+  return value.replace(DATE_FORMAT_PARTS, '').replace(/[-_. ]/g, '') === '';
+}
+
+function renderDateFormat(format: string, createdAt: string): string {
+  const parts = dateParts(createdAt);
+  if (parts.date === 'unknown-date' || parts.time === 'unknown-time') return 'unknown-datetime';
+  const values: Record<string, string> = {
+    yyyy: parts.year,
+    yy: parts.year.slice(-2),
+    MM: parts.month,
+    M: String(Number(parts.month)),
+    dd: parts.day,
+    d: String(Number(parts.day)),
+    HH: parts.hour,
+    H: String(Number(parts.hour)),
+    mm: parts.minute,
+    m: String(Number(parts.minute)),
+    ss: parts.second,
+    s: String(Number(parts.second)),
+  };
+  return format.replace(DATE_FORMAT_PARTS, token => values[token]);
+}
+
+function templateVariableValue(expression: string, memo: FlomoMemo): string | null {
+  if (isDateFormatExpression(expression)) return renderDateFormat(expression, memo.created_at);
+  const lengthMatch = expression.match(/^(title|slug)(?::(\d+))?$/);
+  const parts = dateParts(memo.created_at);
+  const values: Record<string, string> = {
+    ...parts,
+    'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
+    first_tag: extractTags(memo)[0] || 'untagged',
+    title: memoTitle(memo),
+    slug: memo.slug,
+  };
+  const key = lengthMatch?.[1] || expression;
+  if (!(key in values)) return null;
+  const value = values[key];
+  return lengthMatch?.[2] ? value.slice(0, Math.max(1, Number.parseInt(lengthMatch[2], 10))) : value;
+}
+
 function validateTemplateVariables(template: string, label: string): string | null {
   const tokens = template.match(/{{[^}]+}}/g) || [];
   for (const token of tokens) {
-    if (!/^{{(?:date|time|year|month|day|hour|minute|second|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)}}$/.test(token)) {
+    const expression = token.slice(2, -2);
+    if (!isDateFormatExpression(expression)
+      && !/^(?:date|time|year|month|day|hour|minute|second|YYYY-MM-DD-HHmmss|first_tag|title(?::\d+)?|slug(?::\d+)?)$/.test(expression)) {
       return `不支持的${label}变量：${token}`;
     }
   }
@@ -265,20 +341,7 @@ export function renderFileName(template: string, memo: FlomoMemo): string {
   const error = validateFileNameTemplate(template);
   if (error) throw new Error(error);
 
-  const parts = dateParts(memo.created_at);
-  const title = memoTitle(memo);
-  const firstTag = extractTags(memo)[0] || 'untagged';
-  const rendered = template.replace(/{{(YYYY-MM-DD-HHmmss|date|time|year|month|day|hour|minute|second|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
-    const values: Record<string, string> = {
-      ...parts,
-      'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
-      first_tag: firstTag,
-      title,
-      slug: memo.slug,
-    };
-    const value = values[key] || '';
-    return length ? value.slice(0, Math.max(1, Number.parseInt(length, 10))) : value;
-  });
+  const rendered = template.replace(/{{([^{}]+)}}/g, (_match, expression: string) => templateVariableValue(expression, memo) || '');
   return sanitizePathSegment(rendered);
 }
 
@@ -322,22 +385,13 @@ export function renderYamlTemplate(template: string, memo: FlomoMemo): string {
   const error = validateYamlTemplate(template);
   if (error) throw new Error(error);
   if (!template.trim()) return '';
-  const parts = dateParts(memo.created_at);
-  const values: Record<string, string> = {
-    ...parts,
-    'YYYY-MM-DD-HHmmss': compactDateTime(memo.created_at),
-    first_tag: extractTags(memo)[0] || 'untagged',
-    title: memoTitle(memo),
-    slug: memo.slug,
-  };
   const rendered = template.trim().split(/\r?\n/).map(line => {
     if (!line.includes('{{') || line.trim().startsWith('#')) return line;
     const replacements: string[] = [];
     let sentinel = 'FLOMO_TEMPLATE_SLOT_';
     while (line.includes(sentinel)) sentinel += '_';
-    const skeleton = line.replace(/{{(YYYY-MM-DD-HHmmss|date|time|year|month|day|hour|minute|second|first_tag|title|slug)(?::(\d+))?}}/g, (_match, key: string, length: string) => {
-      const raw = values[key] || '';
-      replacements.push(length ? raw.slice(0, Math.max(1, Number.parseInt(length, 10))) : raw);
+    const skeleton = line.replace(/{{([^{}]+)}}/g, (_match, expression: string) => {
+      replacements.push(templateVariableValue(expression, memo) || '');
       return `${sentinel}${replacements.length - 1}_END`;
     });
     const parsed = parseYaml(skeleton) as Record<string, unknown>;
@@ -560,22 +614,85 @@ ${markdown}${attachmentBlock}
 ${BODY_END}`;
 }
 
-export function buildNewMemoFile(memo: FlomoMemo, options: ManagedRenderOptions): string {
-  const template = renderYamlTemplate(options.yamlTemplate || '', memo);
-  const extraYaml = [standardTagsBlock(extractTags(memo)), template].filter(Boolean).join('\n');
-  const content = `---
-${managedFrontmatterBlock(memo, options)}
-${extraYaml}
----
+function tokenCount(template: string, token: string): number {
+  return template.split(token).length - 1;
+}
 
-${managedBodyBlock(memo, options)}
+function isStandaloneToken(line: string, token: string): boolean {
+  return line.trim() === token;
+}
 
-## 我的补充
+export function validateNoteTemplate(template: string): string | null {
+  if (!template.trim()) return '笔记模板不能为空';
+  for (const [token, label] of [
+    [NOTE_TAGS_TOKEN, '标签合并区'],
+    [NOTE_CONTENT_TOKEN, 'Flomo 正文内容'],
+  ] as const) {
+    const count = tokenCount(template, token);
+    if (count !== 1) return `${label}占位符 ${token} 必须且只能保留一个`;
+  }
+  const frontmatter = splitFrontmatter(template);
+  if (!frontmatter) return '模板必须以完整的 YAML frontmatter 开头（---）';
+  const metadata = findManagedRegion(template, FRONTMATTER_START, FRONTMATTER_END);
+  if (typeof metadata === 'string') return metadata;
+  const body = findManagedRegion(template, BODY_START, BODY_END);
+  if (typeof body === 'string') return body;
+  const yamlStart = frontmatter.open.length, yamlEnd = yamlStart + frontmatter.yaml.length;
+  if (metadata.start < yamlStart || metadata.end > yamlEnd) return '元数据受管区必须位于文件顶部的 YAML frontmatter 内';
+  if (body.start < yamlEnd + frontmatter.close.length) return '正文受管区必须位于 YAML frontmatter 之后';
+  const managedPrototype = template.slice(metadata.start, metadata.end).replace(/\r\n/g, '\n');
+  if (managedPrototype !== NOTE_MANAGED_PROPERTIES_TEMPLATE) return 'Flomo 属性受管区是安全结构，不能删除或改写其中字段';
+  const bodyPrototype = template.slice(body.start, body.end).replace(/\r\n/g, '\n');
+  if (bodyPrototype !== `${BODY_START}\n${NOTE_CONTENT_TOKEN}\n${BODY_END}`) return 'Flomo 正文受管区必须保留完整标记及正文占位符';
+  const yamlLines = frontmatter.yaml.split(/\r?\n/);
+  if (!yamlLines.some(line => isStandaloneToken(line, NOTE_TAGS_TOKEN))) return `${NOTE_TAGS_TOKEN} 必须在 YAML 中独占一行`;
+  let inManagedYaml = false;
+  const userYaml = yamlLines.filter(line => {
+    if (line.trim() === FRONTMATTER_START) { inManagedYaml = true; return false; }
+    if (inManagedYaml) { if (line.trim() === FRONTMATTER_END) inManagedYaml = false; return false; }
+    return !isStandaloneToken(line, NOTE_TAGS_TOKEN);
+  }).join('\n');
+  const yamlError = validateYamlTemplate(userYaml);
+  if (yamlError) return `用户 YAML：${yamlError}`;
+  const bodyWithoutManaged = template.slice(yamlEnd + frontmatter.close.length, body.start)
+    + template.slice(body.end);
+  return validateTemplateVariables(bodyWithoutManaged, '笔记模板');
+}
 
-`;
+function renderTextTemplate(template: string, memo: FlomoMemo): string {
+  return template.replace(/{{([^{}]+)}}/g, (_match, expression: string) => templateVariableValue(expression, memo) || '');
+}
+
+export function renderNoteTemplate(template: string, memo: FlomoMemo, options: ManagedRenderOptions): string {
+  const error = validateNoteTemplate(template);
+  if (error) throw new Error(error);
+  const frontmatter = splitFrontmatter(template)!;
+  let inManagedYaml = false;
+  const yamlLines: string[] = [];
+  for (const line of frontmatter.yaml.split(/\r?\n/)) {
+    if (line.trim() === FRONTMATTER_START) { inManagedYaml = true; yamlLines.push(managedFrontmatterBlock(memo, options)); continue; }
+    if (inManagedYaml) { if (line.trim() === FRONTMATTER_END) inManagedYaml = false; continue; }
+    if (isStandaloneToken(line, NOTE_TAGS_TOKEN)) yamlLines.push(standardTagsBlock(extractTags(memo)));
+    else yamlLines.push(line.trim() ? renderYamlTemplate(line, memo) : line);
+  }
+  let inManagedBody = false;
+  const bodyLines: string[] = [];
+  for (const line of frontmatter.rest.split(/\r?\n/)) {
+    if (line.trim() === BODY_START) { inManagedBody = true; bodyLines.push(managedBodyBlock(memo, options)); continue; }
+    if (inManagedBody) { if (line.trim() === BODY_END) inManagedBody = false; continue; }
+    bodyLines.push(renderTextTemplate(line, memo));
+  }
+  const content = `${frontmatter.open.replace(/\r\n/g, '\n')}${yamlLines.join('\n')}${frontmatter.close.replace(/\r\n/g, '\n')}${bodyLines.join('\n')}`;
+  const renderedFrontmatter = splitFrontmatter(content);
+  if (!renderedFrontmatter) throw new Error('渲染后缺少完整的 YAML frontmatter');
+  try { parseYaml(renderedFrontmatter.yaml); } catch (parseError) { throw new Error(`渲染后的 YAML 无效：${(parseError as Error).message}`); }
   const validation = inspectManagedMemo(content, memo.slug);
   if (!validation.ok) throw new Error(`无法创建受管笔记：${validation.reason}`);
   return content;
+}
+
+export function buildNewMemoFile(memo: FlomoMemo, options: ManagedRenderOptions): string {
+  return renderNoteTemplate(options.noteTemplate ?? createNoteTemplateFromYaml(options.yamlTemplate || ''), memo, options);
 }
 
 interface ManagedRegion {

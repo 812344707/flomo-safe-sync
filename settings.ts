@@ -1,7 +1,7 @@
-import { ExcludedPolicy, TagFolderMapping, UpdateMode, normalizeTagList } from './sync-core';
+import { DEFAULT_NOTE_TEMPLATE, ExcludedPolicy, TagFolderMapping, UpdateMode, createNoteTemplateFromYaml, normalizeTagList } from './sync-core';
 
 export const DEFAULT_FILE_NAME = '{{date}}_{{time}}_{{title:20}}_{{slug:8}}';
-export const CURRENT_SETTINGS_VERSION = 4;
+export const CURRENT_SETTINGS_VERSION = 5;
 export type DeletionAction = 'keep' | 'mark' | 'archive' | 'trash';
 export interface FileState {
   path: string;
@@ -35,6 +35,8 @@ export interface FlomoSafeSyncSettings {
   fileNameMode: 'default' | 'custom';
   customFileNameTemplate: string;
   fileNameTemplate: string;
+  noteTemplate: string;
+  /** Kept for lossless migration from the v0.3.1 YAML-only editor. */
   yamlTemplate: string;
   scopeMode: 'include' | 'exclude';
   scopeTags: string[];
@@ -55,7 +57,7 @@ export interface FlomoSafeSyncSettings {
 export const DEFAULT_SETTINGS: FlomoSafeSyncSettings = {
   settingsVersion: CURRENT_SETTINGS_VERSION, bearerToken: '', rootFolder: '00-Flomo收件箱',
   fileNameMode: 'default', fileNameTemplate: DEFAULT_FILE_NAME, customFileNameTemplate: DEFAULT_FILE_NAME,
-  yamlTemplate: '', scopeMode: 'include', scopeTags: [], tagFolderMappings: [], availableFlomoTags: [],
+  noteTemplate: DEFAULT_NOTE_TEMPLATE, yamlTemplate: '', scopeMode: 'include', scopeTags: [], tagFolderMappings: [], availableFlomoTags: [],
   excludedTags: [], excludedPolicy: 'freeze', imageFolder: '00-Flomo收件箱/_attachments/flomo',
   localizeImages: true, updateMode: 'both', deletionAction: 'mark', archiveFolder: 'Flomo归档',
   autoSyncOnStartup: false, autoSyncIntervalMinutes: 60, lastSyncTime: 0, syncedMemos: {},
@@ -78,9 +80,10 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
     return settings;
   }
 
-  // v3 -> v4 only adds optional per-memo asset identity. Preserve every saved
-  // value exactly; records learn asset mappings during later successful syncs.
+  // v3/v4 -> v5 keeps every saved value and expands the old YAML-only template
+  // into the equivalent complete-note template. Existing notes are untouched.
   if (sourceVersion >= 3) {
+    settings.noteTemplate = loaded.noteTemplate || createNoteTemplateFromYaml(loaded.yamlTemplate || '');
     settings.settingsVersion = CURRENT_SETTINGS_VERSION;
     return settings;
   }
@@ -98,6 +101,7 @@ export function migrateSettings(input: Partial<FlomoSafeSyncSettings> & { flomoF
   settings.fileNameMode = loaded.fileNameMode || (oldTemplate === DEFAULT_FILE_NAME ? 'default' : 'custom');
   settings.customFileNameTemplate = loaded.customFileNameTemplate || oldTemplate;
   settings.fileNameTemplate = settings.fileNameMode === 'default' ? DEFAULT_FILE_NAME : settings.customFileNameTemplate;
+  settings.noteTemplate = loaded.noteTemplate || createNoteTemplateFromYaml(loaded.yamlTemplate || '');
   settings.imageFolder = loaded.imageFolder || `${settings.rootFolder}/_attachments/flomo`;
   settings.updateMode = ['both', 'body', 'properties', 'new-only'].includes(loaded.updateMode || '') ? loaded.updateMode! : 'both';
   settings.deletionAction = ['keep', 'mark', 'archive', 'trash'].includes(loaded.deletionAction || '') ? loaded.deletionAction! : 'mark';

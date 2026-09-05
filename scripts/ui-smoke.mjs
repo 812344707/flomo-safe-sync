@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const PORT = 19223;
 const VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
-const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v031';
+const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v032';
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 const page = targets.find(target => target.title.startsWith('设置 - vault')) || targets.find(target => target.type === 'page' && target.url.includes('obsidian.md')) || targets.find(target => target.type === 'page');
 if (!page) throw new Error('Isolated Obsidian page unavailable');
@@ -10,7 +10,13 @@ const socket = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
 let id = 0; const pending = new Map();
 socket.addEventListener('message', event => { const message = JSON.parse(event.data); const task = pending.get(message.id); if (!task) return; pending.delete(message.id); if (message.error) task.reject(new Error(JSON.stringify(message.error))); else task.resolve(message.result); });
-function send(method, params = {}) { return new Promise((resolve, reject) => { const next = ++id; pending.set(next, { resolve, reject }); socket.send(JSON.stringify({ id: next, method, params })); }); }
+function send(method, params = {}) { return new Promise((resolve, reject) => {
+  const next = ++id;
+  const detail = method === 'Runtime.evaluate' ? String(params.expression || '').slice(0, 180) : '';
+  const timer = setTimeout(() => { pending.delete(next); reject(new Error(`CDP timeout: ${method} ${detail}`)); }, 15000);
+  pending.set(next, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
+  socket.send(JSON.stringify({ id: next, method, params }));
+}); }
 async function evaluate(expression) { const value = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (value.exceptionDetails) throw new Error(value.exceptionDetails.exception?.description || value.exceptionDetails.text); return value.result.value; }
 try {
   const path = await evaluate('(globalThis.app || globalThis.opener?.app)?.vault?.adapter?.basePath');
@@ -57,28 +63,29 @@ try {
       for (let i=0;i<40;i++) { if(await evaluate(`document.querySelector('.flomo-feedback')?.textContent.includes('已保存')`)) return; await new Promise(r=>setTimeout(r,50)); }
       throw new Error('Settings save did not finish');
     };
-    const screenshot = async name => { await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))'); const value=await send('Page.captureScreenshot',{format:'png'}); await fs.writeFile(`${OUTPUT}/${name}.png`,Buffer.from(value.data,'base64')); };
-    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tabs [role=tab]')].map(x=>x.textContent)`), ['连接与同步','保存与命名','同步范围','YAML 模板','更新与安全']);
+    const screenshot = async name => { const value=await send('Page.captureScreenshot',{format:'png'}); await fs.writeFile(`${OUTPUT}/${name}.png`,Buffer.from(value.data,'base64')); };
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tabs [role=tab]')].map(x=>x.textContent)`), ['连接与同步','保存与命名','同步范围','笔记模板','更新与安全']);
     await clickTab('naming'); await change('.flomo-panel select','custom','change');
-    await change('[aria-label="自定义文件名模板"]','{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}_{{title:6}}');
-    await clickTab('scope'); await clickTab('naming'); assert.equal(await evaluate(`document.querySelector('[aria-label="自定义文件名模板"]').value`),'{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}_{{title:6}}');
+    await change('[aria-label="自定义文件名模板"]','{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
+    await clickTab('scope'); await clickTab('naming'); assert.equal(await evaluate(`document.querySelector('[aria-label="自定义文件名模板"]').value`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     await button('保存文件名设置'); await waitSaved();
     await change('[aria-label="自定义文件名模板"]','{{unknown}}'); await button('保存文件名设置');
-    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.fileNameTemplate`),'{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}_{{title:6}}');
+    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.fileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     await change('.flomo-panel select','default','change'); await button('保存文件名设置'); await waitSaved();
-    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}_{{title:6}}');
+    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     await button('还原'); await change('.flomo-panel select','custom','change'); await button('保存文件名设置'); await waitSaved();
-    assert.ok((await evaluate(`document.querySelector('.flomo-preview').textContent`)).includes('20260901_080910'));
+    assert.ok((await evaluate(`document.querySelector('.flomo-preview').textContent`)).includes('2026-09-01_080910'));
     assert.ok(await evaluate(`document.querySelector('details.flomo-variable-reference')?.open`));
     await screenshot('naming-light');
-    await clickTab('yaml'); const yaml='source: flomo\ncreated: "{{date}}"\naliases: ["{{title}}"]';
-    await change('#flomo-yaml-input',yaml); await clickTab('scope'); await clickTab('yaml'); assert.equal(await evaluate(`document.querySelector('#flomo-yaml-input').value`),yaml);
+    await clickTab('yaml'); const note='---\n# flomo-sync:frontmatter:start\nflomo_slug: "{{slug}}"\nflomo_status: active\nflomo_sync_policy: managed\nflomo_created_at: "{{created_at}}"\nflomo_updated_at: "{{updated_at}}"\nflomo_last_synced_at: "{{synced_at}}"\n# flomo-sync:frontmatter:end\n{{flomo_tags}}\nsource: flomo\ncreated: "{{yyyy-MM-dd}}"\naliases: ["{{title}}"]\n---\n\n# {{title:8}}\n\n<!-- flomo-sync:content:start -->\n{{flomo_content}}\n<!-- flomo-sync:content:end -->\n\n## 我的补充\n\n';
+    await change('#flomo-note-template-input',note); await clickTab('scope'); await clickTab('yaml'); assert.equal(await evaluate(`document.querySelector('#flomo-note-template-input').value`),note);
     assert.ok(await evaluate(`document.querySelector('.flomo-whole-note-preview')?.textContent.includes('# flomo-sync:frontmatter:start')`));
     assert.equal(await evaluate(`document.querySelectorAll('.flomo-preview-zone.is-managed').length`),2);
-    assert.ok(await evaluate(`document.querySelector('.flomo-preview-zone.is-editable')?.textContent.includes('source: flomo')`));
-    await button('保存 YAML 模板'); await waitSaved();
-    await change('#flomo-yaml-input','"tags": []'); await button('保存 YAML 模板'); assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.yamlTemplate`),yaml);
-    await button('还原'); assert.equal(await evaluate(`document.querySelector('#flomo-yaml-input').value`),yaml);
+    assert.ok(await evaluate(`[...document.querySelectorAll('.flomo-preview-zone.is-editable')].some(x=>x.textContent.includes('source: flomo'))`));
+    assert.ok(await evaluate(`document.querySelector('.flomo-whole-note-preview')?.textContent.includes('# 第一条写作想法')`));
+    await button('保存笔记模板'); await waitSaved();
+    await change('#flomo-note-template-input',note.replace('{{flomo_content}}','')); await button('保存笔记模板'); assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.noteTemplate`),note);
+    await button('还原'); assert.equal(await evaluate(`document.querySelector('#flomo-note-template-input').value`),note);
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:850,deviceScaleFactor:1,mobile:false}); await screenshot('yaml-light-wide');
     await evaluate(`document.body.classList.remove('theme-light');document.body.classList.add('theme-dark')`); await screenshot('yaml-dark-wide');
     await send('Emulation.setDeviceMetricsOverride',{width:560,height:850,deviceScaleFactor:1,mobile:false}); await screenshot('yaml-dark-narrow');
@@ -90,10 +97,10 @@ try {
     await screenshot('safety-dark-narrow');
     await send('Emulation.clearDeviceMetricsOverride');
     await evaluate(`document.body.classList.remove('theme-dark');document.body.classList.add('theme-light')`);
-    await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app;await A.plugins.disablePlugin('flomo-safe-sync');await A.plugins.enablePlugin('flomo-safe-sync');A.setting.openTabById('flomo-safe-sync');})()`);
-    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.yamlTemplate`),yaml);
-    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}_{{title:6}}');
-    const data=JSON.parse(await fs.readFile(`${VAULT}/.obsidian/plugins/flomo-safe-sync/data.json`,'utf8')); assert.equal(data.yamlTemplate,yaml);
+    await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app,p=A.plugins.plugins['flomo-safe-sync'];p.settings.noteTemplate='unsaved-memory-value';p.settings.customFileNameTemplate='unsaved-memory-value';await p.loadSettings();A.setting.openTabById('flomo-safe-sync');})()`);
+    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.noteTemplate`),note);
+    assert.equal(await evaluate(`(globalThis.app || globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.customFileNameTemplate`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
+    const data=JSON.parse(await fs.readFile(`${VAULT}/.obsidian/plugins/flomo-safe-sync/data.json`,'utf8')); assert.equal(data.noteTemplate,note);
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:850,deviceScaleFactor:1,mobile:false});
     await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app,p=A.plugins.plugins['flomo-safe-sync'];p.settings.scopeMode='include';p.settings.scopeTags=['工作','工作/项目','工作/项目/甲'];p.settings.availableFlomoTags=['工作','工作/项目','工作/项目/甲','生活'];p.settings.tagFolderMappings=[];await p.saveSettings();A.setting.openTabById('flomo-safe-sync');})()`);
     await clickTab('scope');
@@ -105,7 +112,7 @@ try {
     await clickTab('connection');
     const compact=await evaluate(`(()=>{const row=[...document.querySelectorAll('.setting-item')].find(x=>x.querySelector('.setting-item-name')?.textContent==='启动时同步'),a=row.querySelector('.setting-item-info').getBoundingClientRect(),b=row.querySelector('.setting-item-control').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<12,rowHeight:row.getBoundingClientRect().height};})()`);
     assert.ok(compact.sameRow);
-    const result={obsidian:'1.13.7',version:'0.3.1',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,automaticMappings:true,wholeNotePreview:true,compact,geometry};
+    const result={obsidian:'1.13.7',version:'0.3.2',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,automaticMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry};
     await fs.writeFile(`${OUTPUT}/ui-results.json`,JSON.stringify(result,null,2)); console.log(result);
 
   }

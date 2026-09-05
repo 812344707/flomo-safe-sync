@@ -29,6 +29,7 @@
 .flomo-safe-sync-settings .flomo-feedback.is-error { color: var(--text-error); }
 .flomo-safe-sync-settings .flomo-yaml-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
 .flomo-safe-sync-settings .flomo-yaml-input { display: block; width: 100%; min-height: 260px; resize: vertical; margin-top: 12px; padding: 12px; font-family: var(--font-monospace); line-height: 1.7; tab-size: 2; }
+.flomo-safe-sync-settings .flomo-note-template-input { min-height: 520px; }
 .flomo-safe-sync-settings .flomo-note-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px; }
 .flomo-safe-sync-settings .flomo-zone-badge { border-radius: 20px; padding: 3px 9px; font-size: var(--font-ui-smaller); border: 1px solid var(--background-modifier-border); }
 .flomo-safe-sync-settings .flomo-zone-badge.is-managed { background: rgba(232, 148, 62, 0.12); background: color-mix(in srgb, var(--color-orange) 16%, transparent); }
@@ -72,6 +73,7 @@
   .flomo-safe-sync-settings .flomo-settings-header { align-items: flex-start; }
   .flomo-safe-sync-settings .flomo-settings-header > button { flex-shrink: 0; }
   .flomo-safe-sync-settings .flomo-editor-card { padding: 12px; }
+  .flomo-safe-sync-settings .flomo-note-template-input { min-height: 420px; }
   .flomo-safe-sync-settings .flomo-variable-reference-row { grid-template-columns: minmax(130px, auto) 1fr; }
   .flomo-safe-sync-settings .flomo-variable-reference-row code:last-child { grid-column: 2; }
 }

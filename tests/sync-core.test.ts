@@ -1,6 +1,11 @@
 import { strict as assert } from 'assert';
 import {
   FlomoMemo,
+  DEFAULT_NOTE_TEMPLATE,
+  BODY_END,
+  BODY_START,
+  FRONTMATTER_END,
+  FRONTMATTER_START,
   buildNewMemoFile,
   collectFlomoTags,
   computeDesiredPaths,
@@ -17,6 +22,7 @@ import {
   renderYamlTemplate,
   updateManagedStatus,
   validateFileNameTemplate,
+  validateNoteTemplate,
   validateVaultRelativePath,
   validateYamlTemplate,
 } from '../sync-core';
@@ -43,7 +49,11 @@ assert.deepEqual(mappedPaths, ['20-写作素材/2026-09-01_08-09-10_第一条写
 assert.equal(validateFileNameTemplate('{{YYYY-MM-DD-HHmmss}}'), null);
 assert.equal(renderFileName('{{YYYY-MM-DD-HHmmss}}', original), '2026-09-01-080910');
 assert.equal(renderFileName('{{year}}{{month}}{{day}}_{{hour}}{{minute}}{{second}}', original), '20260901_080910');
+assert.equal(renderFileName('{{yyyy-MM-dd}}_{{HH-mm-ss}}', original), '2026-09-01_08-09-10');
+assert.equal(renderFileName('{{yy-M-d_H-m-s}}', original), '26-9-1_8-9-10');
+assert.equal(renderFileName('{{yyyyMMdd-HHmmss}}', original), '20260901-080910');
 assert.match(validateFileNameTemplate('{{YYYYMMDD}}') || '', /不支持/);
+assert.match(validateFileNameTemplate('{{yyyy/MM/dd}}') || '', /不支持/);
 assert.deepEqual(hierarchicalTags(['工作/项目/甲', '生活', '工作', '#工作/项目']), [
   { tag: '工作', depth: 0 }, { tag: '工作/项目', depth: 1 }, { tag: '工作/项目/甲', depth: 2 }, { tag: '生活', depth: 0 },
 ]);
@@ -107,6 +117,40 @@ assert.doesNotMatch(created, /flomo_tags:/);
 assert.doesNotMatch(created, /#写作 #素材/);
 assert.match(created, /source: flomo/);
 assert.match(created, /created: "2026-09-01"/);
+
+assert.equal(validateNoteTemplate(DEFAULT_NOTE_TEMPLATE), null);
+const completeTemplate = `---
+${FRONTMATTER_START}
+flomo_slug: "{{slug}}"
+flomo_status: active
+flomo_sync_policy: managed
+flomo_created_at: "{{created_at}}"
+flomo_updated_at: "{{updated_at}}"
+flomo_last_synced_at: "{{synced_at}}"
+${FRONTMATTER_END}
+{{flomo_tags}}
+source: flomo
+created: "{{yyyy-MM-dd}}"
+---
+
+# {{title:4}}
+
+${BODY_START}
+{{flomo_content}}
+${BODY_END}
+
+> 自定义固定说明
+`;
+assert.equal(validateNoteTemplate(completeTemplate), null);
+const completeNote = buildNewMemoFile(original, { syncedAt: '2026-09-01T08:10:00.000Z', noteTemplate: completeTemplate });
+assert.match(completeNote, /^---\n# flomo-sync:frontmatter:start/m);
+assert.match(completeNote, /created: "2026-09-01"/);
+assert.match(completeNote, /# 第一条写/);
+assert.match(completeNote, /> 自定义固定说明/);
+assert.equal(hasManagedMarkers(completeNote, original.slug), true);
+assert.match(validateNoteTemplate(completeTemplate.replace('{{flomo_content}}', '')) || '', /必须且只能保留一个/);
+assert.match(validateNoteTemplate(completeTemplate.replace('{{flomo_tags}}', '{{flomo_tags}}\n{{flomo_tags}}')) || '', /必须且只能保留一个/);
+assert.match(validateNoteTemplate(completeTemplate.replace('{{flomo_tags}}', '{{flomo_tags}}\nflomo_status: active')) || '', /由插件维护/);
 
 const withManualContent = created
   .replace('## 我的补充\n\n', '## 我的补充\n\n这是我的手工内容。\n')

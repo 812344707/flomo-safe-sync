@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import FlomoSafeSyncPlugin from '../main';
 import { CURRENT_SETTINGS_VERSION, DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
-import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateYamlTemplate } from '../sync-core';
+import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateNoteTemplate, validateYamlTemplate } from '../sync-core';
 import { App, MemoryAdapter, clearMockObservations, getMockState, parseYaml, resetObsidianMock, setLoadedData, setMockMemos, setMockResponses } from './obsidian-mock';
 
 const memo: FlomoMemo = { slug: 'memo-001', content: '<p>原始内容</p>', tags: [{ name: '写作' }], created_at: '2026-09-01 08:00:00', updated_at: '2026-09-01 08:00:00' };
@@ -17,7 +17,7 @@ async function harness(overrides: Partial<FlomoSafeSyncSettings> = {}, existing 
   resetObsidianMock();
   const adapter = new MemoryAdapter(existing ? { [path]: originalNote, 'Images/retained.png': 'retained binary' } : {});
   const app = new App(adapter);
-  const plugin = new FlomoSafeSyncPlugin(app as unknown as ConstructorParameters<typeof FlomoSafeSyncPlugin>[0], { id: 'test', name: 'test', version: '0.3.1', minAppVersion: '1.2.3', author: 'test', description: 'test' });
+  const plugin = new FlomoSafeSyncPlugin(app as unknown as ConstructorParameters<typeof FlomoSafeSyncPlugin>[0], { id: 'test', name: 'test', version: '0.3.2', minAppVersion: '1.2.3', author: 'test', description: 'test' });
   await plugin.loadSettings();
   Object.assign(plugin.settings, { bearerToken: 'v030-fake-token', rootFolder: 'Inbox', imageFolder: 'Images', scopeMode: 'exclude', scopeTags: [], localizeImages: false,
     syncedMemos: existing ? { [memo.slug]: { updated_at: memo.updated_at, bodyUpdatedAt: memo.updated_at, propertiesUpdatedAt: memo.updated_at,
@@ -42,7 +42,7 @@ test('v0.2 migration preserves include scope, custom template and history; runs 
   assert.equal(old.tagFolderMappings[0].tag, '#写作');
 });
 test('default settings never share arrays or records', () => { const a = migrateSettings(), b = migrateSettings(); a.scopeTags.push('a'); assert.deepEqual(b.scopeTags, []); });
-test('v3 to v4 migration preserves saved values and unknown extension data', () => {
+test('v3 to current migration preserves saved values and unknown extension data', () => {
   const saved = {
     settingsVersion: 3, localizeImages: false, autoSyncIntervalMinutes: 0, scopeTags: [], tagFolderMappings: [],
     futureExtension: { enabled: false, values: [] }, syncedMemos: { a: { updated_at: memo.updated_at, fileName: 'a', filePaths: ['A/a.md'] } },
@@ -52,6 +52,17 @@ test('v3 to v4 migration preserves saved values and unknown extension data', () 
   assert.equal(migrated.autoSyncIntervalMinutes, 0); assert.deepEqual(migrated.scopeTags, []);
   assert.deepEqual((migrated as unknown as typeof saved).futureExtension, saved.futureExtension);
   assert.deepEqual(migrated.syncedMemos, saved.syncedMemos);
+});
+test('v4 YAML-only template migrates to an equivalent editable complete-note template', () => {
+  const saved = { settingsVersion: 4, yamlTemplate: 'source: flomo\ncreated: "{{date}}"', rootFolder: 'Old', syncedMemos: {} };
+  const migrated = migrateSettings(saved as unknown as Partial<FlomoSafeSyncSettings>);
+  assert.equal(migrated.settingsVersion, CURRENT_SETTINGS_VERSION);
+  assert.equal(validateNoteTemplate(migrated.noteTemplate), null);
+  assert.match(migrated.noteTemplate, /# flomo-sync:frontmatter:start/);
+  assert.match(migrated.noteTemplate, /source: flomo/);
+  const rendered = buildNewMemoFile(memo, { syncedAt: '2026-09-01T00:00:00Z', noteTemplate: migrated.noteTemplate });
+  assert.match(rendered, /created: "2026-09-01"/);
+  assert.equal(saved.settingsVersion, 4);
 });
 test('loading current settings preserves every saved value and unknown extension data', () => {
   const saved = migrateSettings({

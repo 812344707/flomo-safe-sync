@@ -1,18 +1,25 @@
 import { App, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
 import type FlomoSafeSyncPlugin from './main';
 import { DEFAULT_FILE_NAME, DeletionAction, FileState } from './settings';
-import { BODY_END, BODY_START, FRONTMATTER_END, FRONTMATTER_START, FlomoMemo, UpdateMode, buildNewMemoFile,
+import { BODY_END, BODY_START, DEFAULT_NOTE_TEMPLATE, FRONTMATTER_END, FRONTMATTER_START, FlomoMemo,
+  NOTE_CONTENT_TOKEN, NOTE_TAGS_TOKEN, UpdateMode, buildNewMemoFile,
   computeDesiredPaths, hierarchicalTags, normalizeTag, normalizeTagList, normalizeVaultPath,
-  renderFileName, renderYamlTemplate, validateFileNameTemplate, validateVaultRelativePath, validateYamlTemplate } from './sync-core';
+  renderFileName, validateFileNameTemplate, validateNoteTemplate, validateVaultRelativePath } from './sync-core';
 
 export const SAMPLE_MEMO: FlomoMemo = { slug: 'abcdef123456', content: '<p>第一条写作想法</p>',
   tags: [{ name: '写作' }, { name: '素材' }], created_at: '2026-09-01 08:09:10', updated_at: '2026-09-01 08:09:10' };
-const TABS = [['connection', '连接与同步'], ['naming', '保存与命名'], ['scope', '同步范围'], ['yaml', 'YAML 模板'], ['safety', '更新与安全']] as const;
+const TABS = [['connection', '连接与同步'], ['naming', '保存与命名'], ['scope', '同步范围'], ['yaml', '笔记模板'], ['safety', '更新与安全']] as const;
 const TIME_VARIABLES = [
+  ['{{yyyy-MM-dd}}', '自定义日期格式：年-月-日', '2026-09-01'],
+  ['{{yyyyMMdd-HHmmss}}', '自定义日期时间格式', '20260901-080910'],
   ['{{date}}', '完整创建日期', '2026-09-01'], ['{{time}}', '完整创建时间，使用文件名安全分隔符', '08-09-10'],
   ['{{year}}', '四位年份', '2026'], ['{{month}}', '两位月份', '09'], ['{{day}}', '两位日期', '01'],
   ['{{hour}}', '两位小时', '08'], ['{{minute}}', '两位分钟', '09'], ['{{second}}', '两位秒数', '10'],
   ['{{YYYY-MM-DD-HHmmss}}', '兼容原有紧凑日期时间变量', '2026-09-01-080910'],
+] as const;
+const NOTE_STRUCTURE_VARIABLES = [
+  [NOTE_TAGS_TOKEN, '标签合并区，必须在 YAML 中独占一行'],
+  [NOTE_CONTENT_TOKEN, 'Flomo 正文内容，必须位于正文受管区标记之间'],
 ] as const;
 const CONTENT_VARIABLES = [
   ['{{title:20}}', '正文首行，最多 20 字；可编辑长度或使用 {{title}}'], ['{{slug:8}}', 'memo 编号前 8 位；可编辑长度或使用 {{slug}}'], ['{{first_tag}}', '第一个标签；无标签时为 untagged'],
@@ -22,7 +29,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   activeTab: string = 'connection';
   draftFileMode: 'default' | 'custom';
   draftFileTemplate: string;
-  draftYaml: string;
+  draftNoteTemplate: string;
   private busy = false;
   private suggestionId = 0;
   private selectedTrash = new Set<string>();
@@ -30,7 +37,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   constructor(app: App, public plugin: FlomoSafeSyncPlugin, private login: () => Promise<string | null>) {
     super(app, plugin);
     this.resetFileDraft();
-    this.draftYaml = plugin.settings.yamlTemplate;
+    this.draftNoteTemplate = plugin.settings.noteTemplate;
   }
   private resetFileDraft(): void {
     this.draftFileMode = this.plugin.settings.fileNameMode;
@@ -66,7 +73,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
       });
     });
   }
-  private variables(parent: HTMLElement, insert: (value: string) => void): void {
+  private variables(parent: HTMLElement, insert: (value: string) => void, includeStructure = false): void {
     const toolbar = parent.createDiv({ cls: 'flomo-variable-toolbar' });
     const timeGroup = toolbar.createDiv({ cls: 'flomo-variable-group' });
     timeGroup.createSpan({ text: '时间', cls: 'flomo-variable-group-label' });
@@ -80,6 +87,14 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
       const button = contentGroup.createEl('button', { text: token, attr: { type: 'button', title: description } });
       button.addEventListener('click', () => insert(token));
     }
+    if (includeStructure) {
+      const structureGroup = toolbar.createDiv({ cls: 'flomo-variable-group' });
+      structureGroup.createSpan({ text: '同步结构', cls: 'flomo-variable-group-label' });
+      for (const [token, description] of NOTE_STRUCTURE_VARIABLES) {
+        const button = structureGroup.createEl('button', { text: token, attr: { type: 'button', title: description } });
+        button.addEventListener('click', () => insert(token));
+      }
+    }
     const timeReference = parent.createEl('details', { cls: 'flomo-variable-reference' });
     timeReference.open = true;
     timeReference.createEl('summary', { text: '时间变量参考' });
@@ -88,9 +103,16 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
       const row = table.createDiv({ cls: 'flomo-variable-reference-row' });
       row.createEl('code', { text: token }); row.createSpan({ text: description }); row.createEl('code', { text: example });
     }
+    timeReference.createEl('p', { cls: 'flomo-muted', text: '日期格式占位符可组合：yyyy/yy 年，MM/M 月，dd/d 日，HH/H 时，mm/m 分，ss/s 秒；大小写有区别，可使用 -、_、. 或空格分隔。' });
     const contentReference = parent.createEl('details', { cls: 'flomo-variable-reference' });
     contentReference.createEl('summary', { text: '内容变量参考' });
     for (const [token, description] of CONTENT_VARIABLES) contentReference.createEl('p', { text: `${token} — ${description}` });
+    if (includeStructure) {
+      const structureReference = parent.createEl('details', { cls: 'flomo-variable-reference' });
+      structureReference.open = true;
+      structureReference.createEl('summary', { text: '同步结构占位符' });
+      for (const [token, description] of NOTE_STRUCTURE_VARIABLES) structureReference.createEl('p', { text: `${token} — ${description}` });
+    }
     contentReference.createEl('a', { text: '打开在线变量参考 ↗', href: 'https://github.com/812344707/flomo-safe-sync#保存位置和文件名', attr: { target: '_blank', rel: 'noopener noreferrer' } });
   }
   private insert(input: HTMLInputElement | HTMLTextAreaElement, token: string, update: (value: string) => void): void {
@@ -283,60 +305,67 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     new Setting(parent).setName('图片本地化').setDesc('识别图床插件已替换的远程图片链接并记住映射，后续同步不再重新下载；下载失败时保留 Flomo 原链接。').addToggle(toggle => toggle.setValue(this.plugin.settings.localizeImages).onChange(async value => { this.plugin.settings.localizeImages = value; await this.persist(); }));
     this.pathSetting(parent, '图片保存目录', 'imageFolder', '目录下按 memo 编号分文件夹；只影响新导入 memo，已有图片沿用原目录。');
   }
-  private renderWholeNotePreview(parent: HTMLElement, content: string, renderedYaml: string): void {
+  private renderWholeNotePreview(parent: HTMLElement, content: string): void {
     parent.empty();
     const legend = parent.createDiv({ cls: 'flomo-note-legend' });
     for (const [label, cls] of [['插件受管区', 'is-managed'], ['标签合并区', 'is-merged'], ['用户可编辑区', 'is-editable']] as const) {
       legend.createSpan({ text: label, cls: `flomo-zone-badge ${cls}` });
     }
     const preview = parent.createEl('pre', { cls: 'flomo-preview flomo-whole-note-preview', attr: { 'aria-label': '完整笔记模板预览' } });
-    const frontStart = content.indexOf(FRONTMATTER_START);
-    const frontEnd = content.indexOf(FRONTMATTER_END) + FRONTMATTER_END.length;
-    const bodyStart = content.indexOf(BODY_START);
-    const bodyEnd = content.indexOf(BODY_END) + BODY_END.length;
-    const yamlStart = renderedYaml ? content.indexOf(renderedYaml, frontEnd) : -1;
+    const zones: Array<{ start: number; end: number; cls: string; title: string }> = [];
+    for (const [startMarker, endMarker, title] of [
+      [FRONTMATTER_START, FRONTMATTER_END, 'Flomo 属性受管区：同步时由插件更新'],
+      [BODY_START, BODY_END, 'Flomo 正文受管区：按更新方式同步'],
+    ] as const) {
+      const start = content.indexOf(startMarker), markerEnd = content.indexOf(endMarker);
+      if (start >= 0 && markerEnd >= start) zones.push({ start, end: markerEnd + endMarker.length, cls: 'is-managed', title });
+    }
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (frontmatter) {
+      const yamlStart = content.indexOf(frontmatter[1]);
+      const tagBlock = frontmatter[1].match(/^tags:[^\r\n]*(?:\r?\n[ \t]+-[^\r\n]*)*/m);
+      if (tagBlock?.index !== undefined) zones.push({ start: yamlStart + tagBlock.index, end: yamlStart + tagBlock.index + tagBlock[0].length,
+        cls: 'is-merged', title: '标签合并区：Flomo 标签会更新，手工标签会保留' });
+    }
+    zones.sort((left, right) => left.start - right.start);
     const append = (text: string, cls = '', title = '') => {
       if (!text) return;
       const span = preview.createSpan({ text, cls });
       if (title) span.setAttribute('title', title);
     };
-    append(content.slice(0, frontStart));
-    append(content.slice(frontStart, frontEnd), 'flomo-preview-zone is-managed', '插件受管区：同步时由插件更新，请勿手工修改');
-    if (yamlStart >= 0) {
-      append(content.slice(frontEnd, yamlStart), 'flomo-preview-zone is-merged', '标签合并区：插件标签会更新，手工标签会保留');
-      append(content.slice(yamlStart, yamlStart + renderedYaml.length), 'flomo-preview-zone is-editable', '用户 YAML 可编辑区：首次导入后由用户维护');
-      append(content.slice(yamlStart + renderedYaml.length, bodyStart));
-    } else {
-      append(content.slice(frontEnd, bodyStart), 'flomo-preview-zone is-merged', '标签合并区：插件标签会更新，手工标签会保留');
+    let cursor = 0;
+    for (const zone of zones) {
+      if (zone.start < cursor) continue;
+      append(content.slice(cursor, zone.start), 'flomo-preview-zone is-editable', '用户可编辑区：模板可自主修改，首次导入后保留');
+      append(content.slice(zone.start, zone.end), `flomo-preview-zone ${zone.cls}`, zone.title);
+      cursor = zone.end;
     }
-    append(content.slice(bodyStart, bodyEnd), 'flomo-preview-zone is-managed', '正文受管区：按更新方式同步');
-    append(content.slice(bodyEnd), 'flomo-preview-zone is-editable', '用户正文可编辑区：同步时始终保留');
+    append(content.slice(cursor), 'flomo-preview-zone is-editable', '用户可编辑区：模板可自主修改，首次导入后保留');
   }
   private yaml(parent: HTMLElement): void {
-    parent.createEl('h3', { text: '完整笔记模板与 YAML' });
-    parent.createEl('p', { cls: 'flomo-muted', text: '左侧只编辑用户 YAML 字段；右侧显示首次导入生成的整篇笔记。插件受管区会随同步更新，用户可编辑区会保留。' });
+    parent.createEl('h3', { text: '完整笔记模板' });
+    parent.createEl('p', { cls: 'flomo-muted', text: '左侧就是首次导入时使用的完整 Markdown 源码，可修改用户 YAML、标题和正文结构。受管区代码已完整显示且不能删除或改写；标签与正文动态占位符必须各保留一个。' });
     const grid = parent.createDiv({ cls: 'flomo-yaml-grid' });
-    const editor = grid.createDiv({ cls: 'flomo-editor-card' }); editor.createEl('label', { text: '用户 YAML 字段（可编辑区）', attr: { for: 'flomo-yaml-input' } });
-    const input = editor.createEl('textarea', { cls: 'flomo-yaml-input', attr: { id: 'flomo-yaml-input', rows: '14', spellcheck: 'false' } }); input.value = this.draftYaml;
-    const output = grid.createDiv({ cls: 'flomo-editor-card' }); output.createEl('strong', { text: '完整笔记预览' });
+    const editor = grid.createDiv({ cls: 'flomo-editor-card' }); editor.createEl('label', { text: '完整笔记源码（可编辑）', attr: { for: 'flomo-note-template-input' } });
+    const input = editor.createEl('textarea', { cls: 'flomo-yaml-input flomo-note-template-input', attr: { id: 'flomo-note-template-input', rows: '24', spellcheck: 'false' } }); input.value = this.draftNoteTemplate;
+    const output = grid.createDiv({ cls: 'flomo-editor-card' }); output.createEl('strong', { text: '首次导入结果预览' });
     const preview = output.createDiv({ attr: { 'aria-live': 'polite' } });
     const feedback = parent.createDiv({ cls: 'flomo-feedback', attr: { role: 'status' } });
     const update = () => {
       try {
-        const error = validateYamlTemplate(this.draftYaml); if (error) throw new Error(error);
-        const renderedYaml = renderYamlTemplate(this.draftYaml, SAMPLE_MEMO);
-        const wholeNote = buildNewMemoFile(SAMPLE_MEMO, { syncedAt: '2026-09-01T08:10:00+08:00', yamlTemplate: this.draftYaml });
-        this.renderWholeNotePreview(preview, wholeNote, renderedYaml);
+        const error = validateNoteTemplate(this.draftNoteTemplate); if (error) throw new Error(error);
+        const wholeNote = buildNewMemoFile(SAMPLE_MEMO, { syncedAt: '2026-09-01T08:10:00+08:00', noteTemplate: this.draftNoteTemplate });
+        this.renderWholeNotePreview(preview, wholeNote);
         feedback.textContent = '草稿预览 · 点击保存后生效'; feedback.removeClass('is-error');
       } catch (error) { preview.textContent = '请修正模板后查看完整笔记预览'; feedback.textContent = `未保存：${(error as Error).message}`; feedback.addClass('is-error'); }
     };
-    input.addEventListener('input', () => { this.draftYaml = input.value; update(); });
-    this.variables(editor, token => this.insert(input, token, value => { this.draftYaml = value; update(); }));
-    new Setting(parent).addButton(button => button.setButtonText('保存 YAML 模板').setCta().onClick(async () => {
-      try { renderYamlTemplate(this.draftYaml, SAMPLE_MEMO); } catch { update(); return; }
-      this.plugin.settings.yamlTemplate = this.draftYaml; await this.persist(); feedback.textContent = '已保存；仅应用于之后首次导入的新笔记。';
-    })).addButton(button => button.setButtonText('还原').onClick(() => { this.draftYaml = this.plugin.settings.yamlTemplate; this.display(); }))
-      .addButton(button => button.setButtonText('插入示例').onClick(() => { this.draftYaml += `${this.draftYaml ? '\n' : ''}source: flomo\nnote_type: memo\ncreated: "{{date}} {{hour}}:{{minute}}"\naliases: []`; input.value = this.draftYaml; update(); }));
+    input.addEventListener('input', () => { this.draftNoteTemplate = input.value; update(); });
+    this.variables(editor, token => this.insert(input, token, value => { this.draftNoteTemplate = value; update(); }), true);
+    new Setting(parent).addButton(button => button.setButtonText('保存笔记模板').setCta().onClick(async () => {
+      try { buildNewMemoFile(SAMPLE_MEMO, { syncedAt: '2026-09-01T08:10:00+08:00', noteTemplate: this.draftNoteTemplate }); } catch { update(); return; }
+      this.plugin.settings.noteTemplate = this.draftNoteTemplate; await this.persist(); feedback.textContent = '已保存；仅应用于之后首次导入的新笔记。';
+    })).addButton(button => button.setButtonText('还原').onClick(() => { this.draftNoteTemplate = this.plugin.settings.noteTemplate; this.display(); }))
+      .addButton(button => button.setButtonText('恢复默认模板').onClick(() => { this.draftNoteTemplate = DEFAULT_NOTE_TEMPLATE; input.value = this.draftNoteTemplate; update(); }));
     update();
   }
   private safety(parent: HTMLElement): void {
