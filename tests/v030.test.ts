@@ -153,6 +153,41 @@ for (const mode of ['body', 'properties', 'new-only'] as const) test(`${mode} fo
   assert.equal(record(h).bodyUpdatedAt, updated.updated_at); assert.equal(record(h).propertiesUpdatedAt, updated.updated_at);
 });
 test('new-only still imports complete first notes', async () => { const h = await harness({ updateMode: 'new-only' }, false); await sync(h, [memo]); assert.match(h.adapter.files.get(record(h).filePaths[0])!, /原始内容/); });
+test('a deleted local note is reported even when the remote timestamp has not changed', async () => {
+  const h = await harness(); h.adapter.files.delete(path); await sync(h, [memo]);
+  assert.equal(h.plugin.lastResult?.conflictCount, 1);
+  assert.match(h.plugin.lastErrors[0], /本地文件缺失.*检查并重新导入/);
+  assert.deepEqual(await h.plugin.findMissingLocalMemos(), [{ slug: memo.slug, fileName: 'note', filePaths: [path] }]);
+  const frozen = await harness({ excludedTags: ['写作'], excludedPolicy: 'freeze' }); frozen.adapter.files.delete(path); await sync(frozen, [memo]);
+  assert.equal(frozen.plugin.lastResult?.conflictCount, 1); assert.equal(frozen.plugin.lastResult?.frozenCount, 0);
+});
+test('an explicitly selected missing note reimports into the current folder and retains its asset history', async () => {
+  const h = await harness({ rootFolder: 'Correct', localizeImages: true });
+  record(h).assetMap = { 'https://img.example/a.png': 'https://cdn.example/a.png' };
+  const memoWithHostedImage = { ...memo, content: '<p>原始内容</p><img src="https://img.example/a.png">' };
+  h.adapter.files.delete(path); setMockMemos([memoWithHostedImage]);
+  const result = await h.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 1); assert.deepEqual(result.errors, []);
+  assert.ok(record(h).filePaths[0].startsWith('Correct/'));
+  assert.match(h.adapter.files.get(record(h).filePaths[0])!, /flomo_slug: "memo-001"/);
+  assert.match(h.adapter.files.get(record(h).filePaths[0])!, /https:\/\/cdn\.example\/a\.png/);
+  assert.equal(record(h).assetFolder, 'OldImages/memo-001');
+  assert.deepEqual(record(h).assetMap, { 'https://img.example/a.png': 'https://cdn.example/a.png' });
+  assert.equal(h.adapter.binaryWrites.length, 0);
+  assert.deepEqual(await h.plugin.findMissingLocalMemos(), []);
+});
+test('missing-note reimport refuses to duplicate a restored file or bypass the current scope', async () => {
+  const restored = await harness(); setMockMemos([memo]);
+  let result = await restored.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /仍然存在/); assert.equal(restored.adapter.writes.length, 0);
+  const moved = await harness(); moved.adapter.files.delete(path); moved.adapter.files.set('Moved/note.md', originalNote); setMockMemos([memo]);
+  result = await moved.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /Vault 中已存在同编号笔记 Moved\/note\.md/); assert.equal(moved.adapter.writes.length, 0);
+  const outOfScope = await harness({ scopeMode: 'include', scopeTags: ['其他'] }); outOfScope.adapter.files.delete(path); setMockMemos([memo]);
+  assert.deepEqual(await outOfScope.plugin.findMissingLocalMemos(), []);
+  result = await outOfScope.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /不在同步范围内/); assert.equal(outOfScope.adapter.writes.length, 0);
+});
 test('a conflicting destination prevents attachment downloads and version advancement', async () => {
   const h = await harness({ localizeImages: true }); h.adapter.files.set(path, originalNote.replace('memo-001', 'someone-else'));
   await sync(h, [{ ...updated, content: '<img src="https://img.example/a.png">' }]);

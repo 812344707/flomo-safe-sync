@@ -1,7 +1,7 @@
 import { Notice, Platform, Plugin } from 'obsidian';
 import { collectFlomoTags } from './sync-core';
 import { fetchAllMemos } from './flomo-api';
-import { executeTrash, syncToVault, SyncResult } from './sync-engine';
+import { executeTrash, MissingLocalMemo, ReimportResult, reimportMissingMemos, scanMissingLocalMemos, syncToVault, SyncResult } from './sync-engine';
 import { FlomoSafeSyncSettings, migrateSettings } from './settings';
 import { FlomoSafeSyncSettingTab } from './settings-tab';
 
@@ -104,6 +104,29 @@ export default class FlomoSafeSyncPlugin extends Plugin {
     } catch (error) {
       this.lastErrors = [(error as Error).message];
       new Notice(`回收站操作未完成：${(error as Error).message}`);
+    } finally { this.syncRunning = false; }
+  }
+  async findMissingLocalMemos(): Promise<MissingLocalMemo[]> {
+    return scanMissingLocalMemos(this.app, this.settings);
+  }
+  async reimportMissingLocalMemos(slugs: string[]): Promise<ReimportResult> {
+    if (this.syncRunning) throw new Error('同步正在运行，请稍后重新导入。');
+    if (!this.settings.bearerToken) throw new Error('请先在设置中登录 Flomo。');
+    if (!slugs.length) return { reimportedCount: 0, assetErrorCount: 0, errors: [] };
+    this.syncRunning = true;
+    this.lastErrors = [];
+    try {
+      const token = this.token();
+      const memos = await fetchAllMemos(token);
+      const result = await reimportMissingMemos(this.app, this.settings, memos, token, slugs, () => this.saveSettings());
+      this.settings.availableFlomoTags = collectFlomoTags(memos);
+      this.lastErrors = result.errors;
+      await this.saveSettings();
+      new Notice(`缺失笔记重新导入 ${result.reimportedCount} 篇${result.assetErrorCount ? `，附件失败 ${result.assetErrorCount}` : ''}${result.errors.length ? `，未处理 ${result.errors.length}` : ''}。`);
+      return result;
+    } catch (error) {
+      this.lastErrors = [(error as Error).message];
+      throw error;
     } finally { this.syncRunning = false; }
   }
   async refreshAvailableFlomoTags(): Promise<number> {

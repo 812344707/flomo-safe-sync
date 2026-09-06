@@ -2,7 +2,7 @@
 import { TFile } from 'obsidian';
 import FlomoSafeSyncPlugin from '../main';
 import { buildNewMemoFile, FlomoMemo } from '../sync-core';
-import { executeTrash, syncToVault } from '../sync-engine';
+import { executeTrash, reimportMissingMemos, scanMissingLocalMemos, syncToVault } from '../sync-engine';
 
 const QA_VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
 export default class NativeTestPlugin extends FlomoSafeSyncPlugin {
@@ -51,5 +51,23 @@ export default class NativeTestPlugin extends FlomoSafeSyncPlugin {
     const content = await this.app.vault.adapter.read(path);
     if (!content.includes(hosted) || this.settings.syncedMemos[memo.slug].assetMap?.[source] !== hosted) throw new Error('Hosted image mapping was not retained');
     return { path, hosted, localStillExists: await this.app.vault.adapter.exists(local), assetErrors: result.assetErrorCount };
+  }
+  async qaMissingReimport(): Promise<{ oldPath: string; newPath: string; detected: number; reimported: number }> {
+    this.assertFixture();
+    const suffix = Date.now();
+    const memo: FlomoMemo = { slug: `native-missing-${suffix}`, content: '<p>Recovered from Flomo</p>', tags: [{ name: '恢复' }], created_at: '2026-09-01 08:00:00', updated_at: '2026-09-01 08:00:00' };
+    const oldPath = `native-wrong-${suffix}.md`;
+    const oldFile = await this.app.vault.create(oldPath, buildNewMemoFile(memo, { syncedAt: new Date().toISOString() }));
+    await this.app.vault.delete(oldFile);
+    Object.assign(this.settings, { rootFolder: 'NativeRecovered', scopeMode: 'exclude', scopeTags: [], localizeImages: false, syncedMemos: {
+      [memo.slug]: { fileName: 'native-missing', filePaths: [oldPath], updated_at: memo.updated_at, bodyUpdatedAt: memo.updated_at,
+        propertiesUpdatedAt: memo.updated_at, status: 'active', lastKnownTags: ['恢复'], lastAppliedFlomoTags: ['恢复'], tagsMerged: true },
+    } });
+    const detected = (await scanMissingLocalMemos(this.app, this.settings)).length;
+    const result = await reimportMissingMemos(this.app, this.settings, [memo], '', [memo.slug], () => this.saveSettings());
+    const newPath = this.settings.syncedMemos[memo.slug].filePaths[0];
+    const content = await this.app.vault.adapter.read(newPath);
+    if (!content.includes('Recovered from Flomo')) throw new Error('Native missing note content was not recreated');
+    return { oldPath, newPath, detected, reimported: result.reimportedCount };
   }
 }

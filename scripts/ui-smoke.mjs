@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const PORT = 19223;
 const VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
-const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v035';
+const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v036';
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 const page = targets.find(target => target.title.startsWith('设置 - vault')) || targets.find(target => target.type === 'page' && target.url.includes('obsidian.md')) || targets.find(target => target.type === 'page');
 if (!page) throw new Error('Isolated Obsidian page unavailable');
@@ -49,8 +49,9 @@ try {
       check(!await A.vault.adapter.exists(original), 'trash must move file');
       const listing = await A.vault.adapter.list('.trash'); check(listing.files.some(path => path.endsWith(original)), 'file not found in local trash');
       const hosted = await reloaded.qaImageHost(); check(hosted.assetErrors === 0 && hosted.localStillExists === false, 'hosted image was downloaded again: '+JSON.stringify(hosted));
+      const missing = await reloaded.qaMissingReimport(); check(missing.detected === 1 && missing.reimported === 1 && missing.newPath.startsWith('NativeRecovered/'), 'native missing-note reimport failed: '+JSON.stringify(missing));
       await A.plugins.disablePlugin('flomo-native-tests');
-      return { original, archived, trash, hosted, retainedInTrash: listing.files.filter(path => path.endsWith(original)) };
+      return { original, archived, trash, hosted, missing, retainedInTrash: listing.files.filter(path => path.endsWith(original)) };
     })()`);
     await fs.mkdir(OUTPUT, { recursive: true }); await fs.writeFile(`${OUTPUT}/native-results.json`, JSON.stringify(result, null, 2)); console.log(result);
   } else {
@@ -157,11 +158,18 @@ try {
     assert.ok((await evaluate(`document.querySelector('.flomo-scope-summary').textContent`)).startsWith('已排除 3 个标签'));
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-scope-folder')].map(x=>x.disabled)`), [true,true,true,false]);
     assert.deepEqual(await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].settings.tagFolderMappings`), [{tag:'工作',folder:'Flomo/工作'}]);
-    await clickTab('safety'); assert.ok(await evaluate(`document.querySelectorAll('.flomo-hierarchy-branch').length===2`)); await screenshot('safety-hierarchy-light');
+    await evaluate(`(async()=>{const A=globalThis.app||globalThis.opener.app,p=A.plugins.plugins['flomo-safe-sync'];p.settings.bearerToken='ui-test-token';p.settings.syncedMemos['missing-ui']={updated_at:'2026-09-01 08:00:00',bodyUpdatedAt:'2026-09-01 08:00:00',propertiesUpdatedAt:'2026-09-01 08:00:00',fileName:'需要重新导入',filePaths:['Wrong/需要重新导入.md'],status:'active',lastKnownTags:['生活'],lastAppliedFlomoTags:['生活'],tagsMerged:true};await p.saveSettings();})()`);
+    await clickTab('safety'); assert.ok(await evaluate(`document.querySelectorAll('.flomo-hierarchy-branch').length===2`));
+    await button('检查缺失文件');
+    for(let i=0;i<40;i++){if(await evaluate(`document.querySelector('.flomo-missing-local-list')?.textContent.includes('需要重新导入')`))break;await new Promise(r=>setTimeout(r,50));}
+    assert.ok(await evaluate(`document.querySelector('.flomo-missing-local-list')?.textContent.includes('Wrong/需要重新导入.md')`));
+    await evaluate(`document.querySelector('[aria-label="选择重新导入 需要重新导入"]').click()`);
+    assert.equal(await evaluate(`[...document.querySelectorAll('.flomo-missing-local-list button')].find(x=>x.textContent.includes('按当前目录重新导入'))?.disabled`), false);
+    await screenshot('safety-missing-local-light');
     await clickTab('connection');
     const compact=await evaluate(`(()=>{const row=[...document.querySelectorAll('.setting-item')].find(x=>x.querySelector('.setting-item-name')?.textContent==='启动时同步'),a=row.querySelector('.setting-item-info').getBoundingClientRect(),b=row.querySelector('.setting-item-control').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<12,rowHeight:row.getBoundingClientRect().height};})()`);
     assert.ok(compact.sameRow);
-    const result={obsidian:'1.13.7',version:'0.3.5',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,cascadingTagSelection:true,partialParentState:true,integratedScopeMappingTree:true,collapsedByDefault:true,searchExpandsBranches:true,compactMappingPriority:true,mappingPriorityReordered:true,excludeModePreservesMappings:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry,scopeGeometry};
+    const result={obsidian:'1.13.7',version:'0.3.6',tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,cascadingTagSelection:true,partialParentState:true,integratedScopeMappingTree:true,collapsedByDefault:true,searchExpandsBranches:true,compactMappingPriority:true,mappingPriorityReordered:true,excludeModePreservesMappings:true,missingLocalScan:true,selectedReimportRequiresAction:true,completeNoteEditable:true,wholeNotePreview:true,compact,geometry,scopeGeometry};
     await fs.writeFile(`${OUTPUT}/ui-results.json`,JSON.stringify(result,null,2)); console.log(result);
     await send('Emulation.clearDeviceMetricsOverride');
 

@@ -100,6 +100,7 @@ export class App {
     this.vault = {
       adapter,
       getAbstractFileByPath: (path: string) => adapter.files.has(path) ? new TFile(path) : adapter.directories.has(path) ? new TFolder(path) : null,
+      getMarkdownFiles: () => [...adapter.files.keys()].filter(path => path.toLowerCase().endsWith('.md')).map(path => new TFile(path)),
       getAllLoadedFiles: () => [...[...adapter.files.keys()].map(path => new TFile(path)), ...[...adapter.directories].map(path => new TFolder(path))],
       create: async (path: string, content: string) => { if (await adapter.exists(path)) throw new Error('Refusing to overwrite create target'); await adapter.write(path, content); return new TFile(path); },
       process: async (file: TFile, fn: (text: string) => string) => { const content = fn(await adapter.read(file.path)); await adapter.write(file.path, content); return content; },

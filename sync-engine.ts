@@ -11,6 +11,16 @@ export interface SyncResult {
   unmappedCount: number; deletedMarkedCount: number; archivedCount: number; pendingTrashCount: number;
   conflictCount: number; assetErrorCount: number; errors: string[];
 }
+export interface MissingLocalMemo {
+  slug: string;
+  fileName: string;
+  filePaths: string[];
+}
+export interface ReimportResult {
+  reimportedCount: number;
+  assetErrorCount: number;
+  errors: string[];
+}
 interface AssetResult {
   imageMap: Record<string, string>;
   attachmentPaths: string[];
@@ -37,8 +47,10 @@ function addFileNameSuffix(filePath: string, suffix: string): string {
   return `${filePath.slice(0, dot)}_${suffix}${filePath.slice(dot)}`;
 }
 
-function claimedPaths(settings: FlomoSafeSyncSettings): Set<string> {
-  return new Set(Object.values(settings.syncedMemos).flatMap(record => record.filePaths || []));
+function claimedPaths(settings: FlomoSafeSyncSettings, ignoredSlug?: string): Set<string> {
+  return new Set(Object.entries(settings.syncedMemos)
+    .filter(([slug]) => slug !== ignoredSlug)
+    .flatMap(([, record]) => record.filePaths || []));
 }
 
 async function resolveUniquePaths(
@@ -46,8 +58,9 @@ async function resolveUniquePaths(
   candidates: string[],
   slug: string,
   settings: FlomoSafeSyncSettings,
+  ignoredSlug?: string,
 ): Promise<string[]> {
-  const claimed = claimedPaths(settings);
+  const claimed = claimedPaths(settings, ignoredSlug);
   const resolved: string[] = [];
   for (const candidate of candidates) {
     let next = candidate;
@@ -170,6 +183,15 @@ async function readOwned(app: App, path: string, slug: string): Promise<string> 
   if (!hasManagedMarkers(text, slug)) throw new Error(`${path}：受管区或笔记身份冲突，已保留原文`);
   return text;
 }
+async function assertTrackedFilesPresent(app: App, slug: string, record: SyncedMemoRecord): Promise<void> {
+  const paths = fileStates(record).map(file => file.path);
+  if (!paths.length) throw new Error(`${slug}：同步记录没有本地文件路径，请在“更新与安全”中重新导入`);
+  for (const path of paths) {
+    if (!(await app.vault.adapter.exists(path))) {
+      throw new Error(`${path}：本地文件缺失，请在“更新与安全”中检查并重新导入`);
+    }
+  }
+}
 async function writeStatus(app: App, path: string, slug: string, status: 'active' | 'deleted', excluded: boolean, detectedAt?: string): Promise<void> {
   const file = app.vault.getAbstractFileByPath(path);
   if (!(file instanceof TFile)) throw new Error(`${path}：文件未加载，请恢复文件后重试`);
@@ -282,12 +304,19 @@ async function applyDeletion(app: App, settings: FlomoSafeSyncSettings, slug: st
   record.pendingTrash = false;
 }
 
-async function createMemo(app: App, settings: FlomoSafeSyncSettings, memo: FlomoMemo, token: string, excluded: boolean): Promise<{ record: SyncedMemoRecord; errors: number }> {
+async function createMemo(
+  app: App,
+  settings: FlomoSafeSyncSettings,
+  memo: FlomoMemo,
+  token: string,
+  excluded: boolean,
+  previousRecord?: SyncedMemoRecord,
+): Promise<{ record: SyncedMemoRecord; errors: number }> {
   const options = { syncedAt: new Date().toISOString(), syncPolicy: excluded ? 'excluded' as const : 'managed' as const, noteTemplate: settings.noteTemplate };
   buildNewMemoFile(memo, options); // Validate generated ownership/markers before downloading assets.
-  const paths = await resolveUniquePaths(app, computeDesiredPaths(memo, settings), memo.slug, settings);
-  const assetFolder = `${normalizeVaultPath(settings.imageFolder)}/${sanitizePathSegment(memo.slug)}`;
-  const assets = await localizeMemoAssets(app, memo, assetFolder, token, settings.localizeImages);
+  const paths = await resolveUniquePaths(app, computeDesiredPaths(memo, settings), memo.slug, settings, previousRecord ? memo.slug : undefined);
+  const assetFolder = previousRecord?.assetFolder || `${normalizeVaultPath(settings.imageFolder)}/${sanitizePathSegment(memo.slug)}`;
+  const assets = await localizeMemoAssets(app, memo, assetFolder, token, settings.localizeImages, previousRecord?.assetMap || {});
   const content = buildNewMemoFile(memo, { ...options, imageMap: assets.imageMap, extraAttachmentPaths: assets.attachmentPaths });
   for (const path of paths) { await ensureParentDir(app, path); await app.vault.create(path, content); }
   return { errors: assets.errorCount, record: {
@@ -299,6 +328,7 @@ async function createMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
 }
 
 async function updateMemo(app: App, settings: FlomoSafeSyncSettings, memo: FlomoMemo, record: SyncedMemoRecord, token: string): Promise<{ changed: boolean; errors: number }> {
+  const paths = fileStates(record).map(file => file.path);
   const mode = settings.updateMode;
   if (mode === 'new-only') return { changed: false, errors: 0 };
   const force = record.excluded || record.outOfScope;
@@ -306,7 +336,6 @@ async function updateMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
   const properties = mode !== 'body' && (force || (record.propertiesUpdatedAt ?? record.updated_at) !== memo.updated_at || !record.tagsMerged);
   if (!body && !properties) return { changed: false, errors: 0 };
   const effectiveMode = body && properties ? 'both' : body ? 'body' : 'properties';
-  const paths = fileStates(record).map(file => file.path);
   // Validate every destination before doing any note or attachment write for this memo.
   const ownedContents: string[] = [];
   for (const path of paths) {
@@ -345,6 +374,70 @@ async function updateMemo(app: App, settings: FlomoSafeSyncSettings, memo: Flomo
   return { changed: true, errors: assets.errorCount };
 }
 
+function observedFileStates(record: SyncedMemoRecord): FileState[] {
+  return record.fileStates || record.filePaths.map(path => ({ path, state: 'live' as const }));
+}
+
+async function findOwnedNoteElsewhere(app: App, slug: string): Promise<string | null> {
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (hasManagedMarkers(await app.vault.adapter.read(file.path), slug)) return file.path;
+  }
+  return null;
+}
+
+export async function scanMissingLocalMemos(app: App, settings: FlomoSafeSyncSettings): Promise<MissingLocalMemo[]> {
+  const missing: MissingLocalMemo[] = [];
+  for (const [slug, record] of Object.entries(settings.syncedMemos)) {
+    const files = observedFileStates(record);
+    if (!tagsInScope(record.lastKnownTags || [], settings) || record.status === 'deleted' || record.pendingTrash
+      || !files.length || files.some(file => file.state !== 'live' || file.pending)) continue;
+    const existence = await Promise.all(files.map(file => app.vault.adapter.exists(file.path)));
+    if (existence.every(exists => !exists)) missing.push({ slug, fileName: record.fileName || slug, filePaths: files.map(file => file.path) });
+  }
+  return missing.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN'));
+}
+
+/** Recreate only user-selected active records whose tracked local files are all absent. */
+export async function reimportMissingMemos(
+  app: App,
+  settings: FlomoSafeSyncSettings,
+  memos: FlomoMemo[],
+  token: string,
+  selectedSlugs: string[],
+  save: () => Promise<void>,
+): Promise<ReimportResult> {
+  validateSettings(settings);
+  const result: ReimportResult = { reimportedCount: 0, assetErrorCount: 0, errors: [] };
+  const remote = new Map(memos.map(memo => [memo.slug, memo]));
+  for (const slug of [...new Set(selectedSlugs)]) {
+    try {
+      const record = settings.syncedMemos[slug];
+      if (!record) throw new Error(`${slug}：同步记录已不存在，请重新检查`);
+      const memo = remote.get(slug);
+      if (!memo) throw new Error(`${record.fileName || slug}：Flomo 中已不存在，不能重新导入`);
+      if (!tagsInScope(extractTags(memo), settings)) throw new Error(`${record.fileName || slug}：当前不在同步范围内`);
+      const excluded = Boolean(memoMatchesExcludedTags(memo, settings.excludedTags));
+      if (excluded && settings.excludedPolicy === 'skip') throw new Error(`${record.fileName || slug}：命中“完全不导入”的标签例外`);
+      const files = observedFileStates(record);
+      if (record.status === 'deleted' || record.pendingTrash || !files.length || files.some(file => file.state !== 'live' || file.pending)) {
+        throw new Error(`${record.fileName || slug}：删除、归档或回收站状态未完成，不能重新导入`);
+      }
+      const existence = await Promise.all(files.map(file => app.vault.adapter.exists(file.path)));
+      if (existence.some(Boolean)) throw new Error(`${record.fileName || slug}：至少一个已记录文件仍然存在，已停止以免生成重复笔记`);
+      const existingPath = await findOwnedNoteElsewhere(app, slug);
+      if (existingPath) throw new Error(`${record.fileName || slug}：Vault 中已存在同编号笔记 ${existingPath}，已停止以免生成重复笔记`);
+      const created = await createMemo(app, settings, memo, token, excluded, record);
+      settings.syncedMemos[slug] = created.record;
+      await save();
+      result.reimportedCount++;
+      result.assetErrorCount += created.errors;
+    } catch (error) {
+      result.errors.push((error as Error).message);
+    }
+  }
+  return result;
+}
+
 export async function syncToVault(app: App, settings: FlomoSafeSyncSettings, memos: FlomoMemo[], token: string, save: () => Promise<void>, internalMoves = new Set<string>()): Promise<SyncResult> {
   validateSettings(settings);
   const result: SyncResult = { total: memos.length, newCount: 0, updatedCount: 0, frozenCount: 0, skippedCount: 0, unmappedCount: 0,
@@ -369,6 +462,7 @@ export async function syncToVault(app: App, settings: FlomoSafeSyncSettings, mem
         if (excluded) result.frozenCount++;
       } else {
         if (record.status === 'deleted' || record.fileStates?.some(file => file.state !== 'live' || file.pending)) await restoreRecord(app, memo.slug, record, excluded, save, internalMoves);
+        await assertTrackedFilesPresent(app, memo.slug, record);
         if (excluded) {
           if (settings.excludedPolicy === 'skip') result.skippedCount++; else result.frozenCount++;
         } else {

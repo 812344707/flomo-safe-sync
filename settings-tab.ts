@@ -1,6 +1,7 @@
 import { App, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
 import type FlomoSafeSyncPlugin from './main';
 import { DEFAULT_FILE_NAME, DeletionAction, FileState } from './settings';
+import type { MissingLocalMemo } from './sync-engine';
 import { BODY_END, BODY_START, DEFAULT_NOTE_TEMPLATE, FRONTMATTER_END, FRONTMATTER_START, FlomoMemo,
   NOTE_CONTENT_TOKEN, NOTE_TAGS_TOKEN, UpdateMode, buildNewMemoFile,
   computeDesiredPaths, hierarchicalTags, normalizeTag, normalizeTagList, normalizeVaultPath,
@@ -38,6 +39,8 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   private busy = false;
   private suggestionId = 0;
   private selectedTrash = new Set<string>();
+  private missingLocalMemos: MissingLocalMemo[] | null = null;
+  private selectedMissingLocal = new Set<string>();
   private expandedScopeTags = new Set<string>();
   private scopeOnlySelected = false;
   private scopeSearch = '';
@@ -503,6 +506,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     new Setting(parent).setName('受管区更新方式').setDesc('手工正文及手工属性始终保留。首次导入生成完整笔记；删除与恢复状态按下面的独立规则处理。').addDropdown(dropdown => dropdown
       .addOption('both', '正文与属性').addOption('body', '仅正文').addOption('properties', '仅属性').addOption('new-only', '仅首次导入')
       .setValue(this.plugin.settings.updateMode).onChange(async value => { this.plugin.settings.updateMode = value as UpdateMode; await this.persist(); }));
+    this.missingLocalList(parent);
     const exceptions = parent.createDiv({ cls: 'flomo-hierarchy-group' });
     exceptions.createEl('h4', { text: `标签更新例外（${this.plugin.settings.excludedTags.length}）` });
     exceptions.createEl('p', { cls: 'flomo-muted', text: '只在同步范围内生效。以下内容按层级缩进展示：先选择例外标签，再设置命中后的处理。' });
@@ -518,6 +522,44 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     if (this.plugin.settings.deletionAction === 'archive') this.pathSetting(parent, '归档目录', 'archiveFolder', '保留原相对路径；Flomo 恢复后移回原位置，路径冲突时停止移动。');
     if (this.plugin.settings.deletionAction === 'trash') this.trashList(parent);
     parent.createEl('p', { cls: 'flomo-muted', text: '写入和移动前都会核对受管区标记与笔记编号。冲突时保留原文件，可在“连接与同步”查看原因。' });
+  }
+  private missingLocalList(parent: HTMLElement): void {
+    new Setting(parent).setName('本地缺失笔记').setDesc('保存目录只影响新导入。已有笔记可直接在 Obsidian 内移动；如果已经删除，可检查后按当前目录设置重新导入。')
+      .addButton(button => button.setButtonText('检查缺失文件').onClick(() => this.action(async () => {
+        this.missingLocalMemos = await this.plugin.findMissingLocalMemos();
+        const available = new Set(this.missingLocalMemos.map(item => item.slug));
+        this.selectedMissingLocal = new Set([...this.selectedMissingLocal].filter(slug => available.has(slug)));
+      })));
+    if (this.missingLocalMemos === null) return;
+    const box = parent.createDiv({ cls: 'flomo-editor-card flomo-missing-local-list' });
+    box.createEl('h4', { text: `可重新导入（${this.missingLocalMemos.length}）` });
+    box.createEl('p', { cls: 'flomo-muted', text: '这里只列出同步记录仍在、状态正常且所有已记录 Markdown 文件都已不存在的笔记。重新导入前会读取完整 Flomo 快照，并重新核对同步范围。' });
+    let execute: HTMLButtonElement;
+    for (const memo of this.missingLocalMemos) {
+      const row = box.createEl('label', { cls: 'flomo-trash-row' });
+      const checkbox = row.createEl('input', { attr: { type: 'checkbox', 'aria-label': `选择重新导入 ${memo.fileName}` } });
+      checkbox.checked = this.selectedMissingLocal.has(memo.slug);
+      const info = row.createDiv();
+      info.createEl('strong', { text: memo.fileName });
+      info.createEl('div', { cls: 'flomo-muted', text: `原记录：${memo.filePaths.join('；')}` });
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) this.selectedMissingLocal.add(memo.slug); else this.selectedMissingLocal.delete(memo.slug);
+        execute.disabled = this.selectedMissingLocal.size === 0;
+        execute.textContent = `按当前目录重新导入所选 ${this.selectedMissingLocal.size} 篇`;
+      });
+    }
+    if (!this.missingLocalMemos.length) box.createEl('p', { text: '没有发现可以重新导入的本地缺失笔记。' });
+    execute = box.createEl('button', { text: `按当前目录重新导入所选 ${this.selectedMissingLocal.size} 篇`, cls: 'mod-cta' });
+    execute.disabled = this.selectedMissingLocal.size === 0 || !this.plugin.settings.bearerToken;
+    execute.addEventListener('click', () => {
+      const selected = [...this.selectedMissingLocal];
+      void this.action(async () => {
+        await this.plugin.reimportMissingLocalMemos(selected);
+        this.missingLocalMemos = await this.plugin.findMissingLocalMemos();
+        const remaining = new Set(this.missingLocalMemos.map(item => item.slug));
+        this.selectedMissingLocal = new Set(selected.filter(slug => remaining.has(slug)));
+      });
+    });
   }
   private trashList(parent: HTMLElement): void {
     const box = parent.createDiv({ cls: 'flomo-editor-card' }); box.createEl('h4', { text: '待移入回收站' });
