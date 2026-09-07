@@ -1,4 +1,4 @@
-import { App, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
+import { App, Modal, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
 import type FlomoSafeSyncPlugin from './main';
 import { DEFAULT_FILE_NAME, DeletionAction, FileState } from './settings';
 import type { MissingLocalMemo } from './sync-engine';
@@ -29,6 +29,16 @@ const NOTE_STRUCTURE_VARIABLES = [
 const CONTENT_VARIABLES = [
   ['{{title:20}}', '正文首行，最多 20 字；可编辑长度或使用 {{title}}'], ['{{slug:8}}', 'memo 编号前 8 位；可编辑长度或使用 {{slug}}'], ['{{first_tag}}', '第一个标签；无标签时为 untagged'],
 ] as const;
+type FundingUrls = Record<string, string>;
+
+function validFundingUrls(value: unknown): FundingUrls {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => {
+    const [label, address] = entry;
+    if (!label.trim() || typeof address !== 'string') return false;
+    try { return ['https:', 'http:'].includes(new URL(address).protocol); } catch { return false; }
+  }));
+}
 
 export class FlomoSafeSyncSettingTab extends PluginSettingTab {
   activeTab: string = 'connection';
@@ -172,6 +182,31 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     if (this.activeTab === 'scope') this.scope(panel);
     if (this.activeTab === 'yaml') this.yaml(panel);
     if (this.activeTab === 'safety') this.safety(panel);
+    this.support(root);
+  }
+  private support(parent: HTMLElement): void {
+    const manifest = this.plugin.manifest as typeof this.plugin.manifest & { fundingUrl?: FundingUrls };
+    const fundingUrls = validFundingUrls(manifest.fundingUrl);
+    if (!Object.keys(fundingUrls).length) return;
+    const support = new Setting(parent).setName('支持开发').setDesc('全部功能免费使用；如果插件对你有帮助，可以请开发者喝杯咖啡。');
+    support.settingEl.addClass('flomo-support');
+    support.addButton(button => button.setButtonText('查看收款码').onClick(() => this.openFundingModal(fundingUrls)));
+  }
+  private openFundingModal(fundingUrls: FundingUrls): void {
+    const modal = new Modal(this.app);
+    modal.setTitle('支持 Flomo Safe Sync');
+    modal.contentEl.createEl('p', { cls: 'flomo-muted', text: '自愿打赏不会解锁额外功能。请选择微信或支付宝扫码。' });
+    const grid = modal.contentEl.createDiv({ cls: 'flomo-funding-grid' });
+    for (const [label, address] of Object.entries(fundingUrls)) {
+      const card = grid.createDiv({ cls: 'flomo-funding-card' });
+      card.createEl('h3', { text: label });
+      const image = card.createEl('img', { attr: { src: address, alt: label, loading: 'lazy' } });
+      const feedback = card.createEl('p', { cls: 'flomo-muted', text: '收款码通过阿里云 OSS 图床加载。' });
+      image.addEventListener('error', () => { feedback.textContent = '图片加载失败，请打开原图后扫码。'; });
+      card.createEl('a', { text: '打开原图 ↗', href: address, cls: 'external-link',
+        attr: { target: '_blank', rel: 'noopener noreferrer' } });
+    }
+    modal.open();
   }
   private connection(parent: HTMLElement): void {
     parent.createEl('h3', { text: '连接与同步' });

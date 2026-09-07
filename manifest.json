@@ -1,10 +1,14 @@
 {
   "id": "flomo-safe-sync",
   "name": "Flomo Safe Sync",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "minAppVersion": "1.2.3",
   "description": "Safely sync Flomo memos with managed sections, custom paths, tag routing, and local retention.",
   "author": "Zihong Chen and contributors",
   "authorUrl": "https://delicatewatermelon.com",
+  "fundingUrl": {
+    "微信赞赏码": "https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175131559.jpg",
+    "支付宝收钱码": "https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175138709.jpg"
+  },
   "isDesktopOnly": true
 }

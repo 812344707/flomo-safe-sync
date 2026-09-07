@@ -1,9 +1,15 @@
 # Flomo Safe Sync
 
-Flomo → Obsidian 桌面同步插件。当前版本 **0.3.6**，基于
+Flomo → Obsidian 桌面同步插件。当前版本 **0.3.8**，基于
 [Watermelon4000/flomo-obsidian-sync](https://github.com/Watermelon4000/flomo-obsidian-sync)。
 
 插件只维护明确标记的正文、Flomo 属性及标签的 Flomo 部分，保留手工补充。
+
+## v0.3.8 更新
+
+- 设置页底部增加“支持开发”，可查看微信赞赏码和支付宝收钱码。
+- 打赏完全自愿，不会解锁额外功能；原有设置、同步记录和全部功能保持不变。
+- 收款码只在用户主动打开弹窗时从阿里云 OSS 图床加载；加载失败时可打开原图。
 
 ## v0.3.7 更新
 
@@ -66,7 +72,7 @@ Flomo → Obsidian 桌面同步插件。当前版本 **0.3.6**，基于
 启动同步可单独开关；同步间隔为 0 时关闭定时同步。读取标签不会导入笔记。
 
 接口使用 Flomo 网页端内部 API。令牌保存在当前 Vault 的插件数据中；当前真实账号
-兼容情况需要单独验证。开发与验收结果见 [验证报告](docs/VALIDATION-v0.3.7.md)。
+兼容情况需要单独验证。开发与验收结果见 [验证报告](docs/VALIDATION-v0.3.8.md)。
 
 ## 保存位置和文件名
 
@@ -255,6 +261,15 @@ npm run package
 `npm run check` 包含类型检查、基础功能、受管区安全、旧插件流程、新版同步流程和生产构建。
 自动化逻辑测试使用虚构响应和内存文件，实际 Obsidian 检查使用独立测试库。
 复现步骤、截图和验证边界见 [验证报告](docs/VALIDATION-v0.3.2.md)。
+
+## 支持开发
+
+全部功能免费使用。如果插件对你有帮助，可以自愿打赏：
+
+- [微信赞赏码](https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175131559.jpg)
+- [支付宝收钱码](https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175138709.jpg)
+
+设置页只有在主动点击“查看收款码”后才加载上述图片。
 
 ## 许可
 
