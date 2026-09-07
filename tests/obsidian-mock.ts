@@ -145,13 +145,6 @@ export class PluginSettingTab {
   constructor(public app: App, public plugin: Plugin) {}
 }
 
-export class Modal {
-  contentEl = {} as HTMLElement;
-  constructor(public app: App) {}
-  setTitle(): this { return this; }
-  open(): void {}
-}
-
 export class Setting {}
 
 export async function requestUrl(options: RequestOptions): Promise<{

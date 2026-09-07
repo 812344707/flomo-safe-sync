@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
+import { App, Notice, Platform, PluginSettingTab, Setting, TFolder } from 'obsidian';
 import type FlomoSafeSyncPlugin from './main';
 import { DEFAULT_FILE_NAME, DeletionAction, FileState } from './settings';
 import type { MissingLocalMemo } from './sync-engine';
@@ -10,7 +10,7 @@ import { BODY_END, BODY_START, DEFAULT_NOTE_TEMPLATE, FRONTMATTER_END, FRONTMATT
 
 export const SAMPLE_MEMO: FlomoMemo = { slug: 'abcdef123456', content: '<p>第一条写作想法</p>',
   tags: [{ name: '写作' }, { name: '素材' }], created_at: '2026-09-01 08:09:10', updated_at: '2026-09-01 08:09:10' };
-const TABS = [['connection', '连接与同步'], ['naming', '保存与命名'], ['scope', '同步范围'], ['yaml', '笔记模板'], ['safety', '更新与安全']] as const;
+const TABS = [['connection', '连接与同步'], ['naming', '保存与命名'], ['scope', '同步范围'], ['yaml', '笔记模板'], ['safety', '更新与安全'], ['more', '更多']] as const;
 const RECOMMENDED_TIME_VARIABLES = [
   ['{{yyyy-MM-dd}}', '推荐日期格式：年-月-日', '2026-09-01'],
   ['{{yyyy-MM-dd_HH-mm-ss}}', '推荐日期时间格式（24 小时制）', '2026-09-01_08-09-10'],
@@ -168,11 +168,19 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     for (const [id, title] of TABS) {
       const button = navigation.createEl('button', { text: title, cls: this.activeTab === id ? 'is-active' : '',
         attr: { id: `flomo-tab-${id}`, role: 'tab', 'aria-selected': String(this.activeTab === id), 'aria-controls': `flomo-panel-${id}`, tabindex: this.activeTab === id ? '0' : '-1' } });
-      button.addEventListener('click', () => { this.activeTab = id; this.display(); this.containerEl.querySelector<HTMLButtonElement>(`#flomo-tab-${id}`)?.focus(); });
+      button.addEventListener('click', () => {
+        this.activeTab = id; this.display();
+        const active = this.containerEl.querySelector<HTMLButtonElement>(`#flomo-tab-${id}`);
+        active?.focus(); active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
       button.addEventListener('keydown', event => {
         const index = TABS.findIndex(([key]) => key === this.activeTab);
         const target = event.key === 'ArrowRight' ? (index + 1) % TABS.length : event.key === 'ArrowLeft' ? (index + TABS.length - 1) % TABS.length : event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : -1;
-        if (target >= 0) { event.preventDefault(); this.activeTab = TABS[target][0]; this.display(); this.containerEl.querySelector<HTMLButtonElement>(`#flomo-tab-${this.activeTab}`)?.focus(); }
+        if (target >= 0) {
+          event.preventDefault(); this.activeTab = TABS[target][0]; this.display();
+          const active = this.containerEl.querySelector<HTMLButtonElement>(`#flomo-tab-${this.activeTab}`);
+          active?.focus(); active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
       });
     }
     const panel = root.createEl('fieldset', { cls: 'flomo-panel', attr: { id: `flomo-panel-${this.activeTab}`, role: 'tabpanel', 'aria-labelledby': `flomo-tab-${this.activeTab}` } });
@@ -182,31 +190,22 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     if (this.activeTab === 'scope') this.scope(panel);
     if (this.activeTab === 'yaml') this.yaml(panel);
     if (this.activeTab === 'safety') this.safety(panel);
-    this.support(root);
+    if (this.activeTab === 'more') this.more(panel);
   }
-  private support(parent: HTMLElement): void {
+  private more(parent: HTMLElement): void {
+    parent.createEl('h3', { text: '更多' });
+    const hero = parent.createDiv({ cls: 'flomo-more-hero' });
+    hero.createEl('h3', { text: '支持开发者' });
+    hero.createEl('p', { text: '如果 Flomo Safe Sync 对你有帮助，可以请开发者喝杯咖啡。' });
     const manifest = this.plugin.manifest as typeof this.plugin.manifest & { fundingUrl?: FundingUrls };
     const fundingUrls = validFundingUrls(manifest.fundingUrl);
-    if (!Object.keys(fundingUrls).length) return;
-    const support = new Setting(parent).setName('支持开发').setDesc('全部功能免费使用；如果插件对你有帮助，可以请开发者喝杯咖啡。');
-    support.settingEl.addClass('flomo-support');
-    support.addButton(button => button.setButtonText('查看收款码').onClick(() => this.openFundingModal(fundingUrls)));
-  }
-  private openFundingModal(fundingUrls: FundingUrls): void {
-    const modal = new Modal(this.app);
-    modal.setTitle('支持 Flomo Safe Sync');
-    modal.contentEl.createEl('p', { cls: 'flomo-muted', text: '自愿打赏不会解锁额外功能。请选择微信或支付宝扫码。' });
-    const grid = modal.contentEl.createDiv({ cls: 'flomo-funding-grid' });
+    const grid = parent.createDiv({ cls: 'flomo-funding-grid' });
     for (const [label, address] of Object.entries(fundingUrls)) {
       const card = grid.createDiv({ cls: 'flomo-funding-card' });
       card.createEl('h3', { text: label });
-      const image = card.createEl('img', { attr: { src: address, alt: label, loading: 'lazy' } });
-      const feedback = card.createEl('p', { cls: 'flomo-muted', text: '收款码通过阿里云 OSS 图床加载。' });
-      image.addEventListener('error', () => { feedback.textContent = '图片加载失败，请打开原图后扫码。'; });
-      card.createEl('a', { text: '打开原图 ↗', href: address, cls: 'external-link',
-        attr: { target: '_blank', rel: 'noopener noreferrer' } });
+      const image = card.createEl('img', { attr: { src: address, alt: label } });
+      image.addEventListener('error', () => { card.createEl('p', { cls: 'flomo-feedback is-error', text: `${label}加载失败。` }); });
     }
-    modal.open();
   }
   private connection(parent: HTMLElement): void {
     parent.createEl('h3', { text: '连接与同步' });

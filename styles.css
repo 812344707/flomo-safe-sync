@@ -11,12 +11,13 @@
 .flomo-safe-sync-settings .setting-item { gap: 16px; padding: 8px 0; min-height: 42px; }
 .flomo-safe-sync-settings .setting-item-info { min-width: 0; }
 .flomo-safe-sync-settings .setting-item-control { flex-wrap: nowrap; gap: 8px; flex-shrink: 0; }
-.flomo-safe-sync-settings .setting-item.flomo-support { flex-direction: row; align-items: center; border-top: 1px solid var(--background-modifier-border); }
-.flomo-safe-sync-settings .flomo-support .setting-item-control { justify-content: flex-end; }
-.flomo-funding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.flomo-funding-card { min-width: 0; text-align: center; }
-.flomo-funding-card h3 { margin: 8px 0; }
-.flomo-funding-card img { display: block; width: 100%; max-width: 300px; height: 360px; object-fit: contain; margin: 0 auto 8px; border-radius: 8px; background: white; }
+.flomo-safe-sync-settings .flomo-more-hero { margin: 12px 0 20px; padding: 20px 22px; border-inline-start: 4px solid var(--interactive-accent); border-radius: 8px; background: var(--background-secondary); }
+.flomo-safe-sync-settings .flomo-more-hero h3 { margin: 0 0 8px; color: var(--text-accent); font-size: 1.45em; }
+.flomo-safe-sync-settings .flomo-more-hero p { margin: 0; line-height: 1.7; }
+.flomo-safe-sync-settings .flomo-funding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.flomo-safe-sync-settings .flomo-funding-card { min-width: 0; text-align: center; }
+.flomo-safe-sync-settings .flomo-funding-card h3 { margin: 8px 0 12px; }
+.flomo-safe-sync-settings .flomo-funding-card img { display: block; width: 100%; max-width: 420px; height: auto; margin: 0 auto; }
 .flomo-safe-sync-settings .flomo-wide { width: 260px; max-width: 100%; }
 .flomo-safe-sync-settings .flomo-template-input { width: 100%; min-width: 0; height: 38px; }
 .flomo-safe-sync-settings .flomo-editor-card { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 18px; margin: 12px 0; min-width: 0; }
@@ -102,10 +103,8 @@
   .flomo-safe-sync-settings .flomo-scope-tree-header { display: none; }
   .flomo-safe-sync-settings .flomo-scope-row { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-block: 7px; }
   .flomo-safe-sync-settings .flomo-scope-folder-cell { padding-inline-start: calc(31px + var(--flomo-tag-depth, 0) * 20px); }
-}
-@media (max-width: 620px) {
-  .flomo-funding-grid { grid-template-columns: minmax(0, 1fr); }
-  .flomo-funding-card img { height: auto; max-height: 360px; }
+  .flomo-safe-sync-settings .flomo-funding-grid { grid-template-columns: minmax(0, 1fr); }
+  .flomo-safe-sync-settings .flomo-more-hero { padding: 16px; }
 }
 @media (max-width: 720px) {
   .flomo-safe-sync-settings .flomo-yaml-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }

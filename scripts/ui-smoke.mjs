@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const PORT = 19223;
 const VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
-const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v038';
+const OUTPUT = '/private/tmp/flomo-safe-sync-qa-v030/evidence-v039';
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 const page = targets.find(target => target.title.startsWith('设置 - vault')) || targets.find(target => target.type === 'page' && target.url.includes('obsidian.md')) || targets.find(target => target.type === 'page');
 if (!page) throw new Error('Isolated Obsidian page unavailable');
@@ -65,18 +65,22 @@ try {
       throw new Error('Settings save did not finish');
     };
     const screenshot = async name => { const value=await send('Page.captureScreenshot',{format:'png'}); await fs.writeFile(`${OUTPUT}/${name}.png`,Buffer.from(value.data,'base64')); };
-    const escape = async () => { await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}); await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}); };
-    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tabs [role=tab]')].map(x=>x.textContent)`), ['连接与同步','保存与命名','同步范围','笔记模板','更新与安全']);
-    assert.equal(await evaluate(`[...document.querySelectorAll('.flomo-support .setting-item-name')].map(x=>x.textContent).join('')`), '支持开发');
-    for (let i=0;i<5 && await evaluate(`document.querySelectorAll('.flomo-funding-grid').length>0`);i++) await escape();
-    await evaluate(`[...document.querySelectorAll('.flomo-support button')].find(x=>x.textContent==='查看收款码').click()`);
-    assert.equal(await evaluate(`[...document.querySelectorAll('.modal-title')].at(-1)?.textContent`), '支持 Flomo Safe Sync');
-    assert.deepEqual(await evaluate(`(()=>{const grid=[...document.querySelectorAll('.flomo-funding-grid')].at(-1);return [...grid.querySelectorAll('img')].map(x=>({alt:x.alt,src:x.src}))})()`), [
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-tabs [role=tab]')].map(x=>x.textContent)`), ['连接与同步','保存与命名','同步范围','笔记模板','更新与安全','更多']);
+    await clickTab('more');
+    assert.equal(await evaluate(`document.querySelector('.flomo-more-hero h3')?.textContent`), '支持开发者');
+    assert.equal(await evaluate(`document.querySelectorAll('.modal-container .flomo-funding-grid').length`), 0);
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-funding-card img')].map(x=>({alt:x.alt,src:x.src}))`), [
       {alt:'微信赞赏码',src:'https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175131559.jpg'},
       {alt:'支付宝收钱码',src:'https://picture-zotero.oss-cn-beijing.aliyuncs.com/zotero/20260907175138709.jpg'},
     ]);
-    await screenshot('funding-light');
-    await escape();
+    for(let i=0;i<80;i++){if(await evaluate(`[...document.querySelectorAll('.flomo-funding-card img')].every(x=>x.complete&&x.naturalWidth>0)`))break;await new Promise(r=>setTimeout(r,50));}
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.flomo-funding-card img')].map(x=>[x.naturalWidth,x.naturalHeight])`), [[1152,1152],[1708,2560]]);
+    await screenshot('more-light');
+    await send('Emulation.setDeviceMetricsOverride',{width:560,height:850,deviceScaleFactor:1,mobile:false});
+    await clickTab('connection'); await clickTab('more'); await new Promise(r=>setTimeout(r,50));
+    const fundingGeometry=await evaluate(`(()=>{const root=document.querySelector('.flomo-safe-sync-settings'),grid=document.querySelector('.flomo-funding-grid'),cards=[...grid.children].map(x=>x.getBoundingClientRect()),tabs=document.querySelector('.flomo-tabs').getBoundingClientRect(),active=document.querySelector('#flomo-tab-more').getBoundingClientRect();return {stacked:cards[1].top>cards[0].bottom-2,client:root.clientWidth,scroll:root.scrollWidth,activeTabVisible:active.left>=tabs.left-1&&active.right<=tabs.right+1};})()`);
+    assert.ok(fundingGeometry.stacked,JSON.stringify(fundingGeometry)); assert.ok(fundingGeometry.scroll<=fundingGeometry.client+2,JSON.stringify(fundingGeometry)); assert.ok(fundingGeometry.activeTabVisible,JSON.stringify(fundingGeometry));
+    await screenshot('more-light-narrow'); await send('Emulation.setDeviceMetricsOverride',{width:1280,height:850,deviceScaleFactor:1,mobile:false});
     await clickTab('naming'); await change('.flomo-panel select','custom','change');
     await change('[aria-label="自定义文件名模板"]','{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
     await clickTab('scope'); await clickTab('naming'); assert.equal(await evaluate(`document.querySelector('[aria-label="自定义文件名模板"]').value`),'{{yyyy-MM-dd}}_{{HHmmss}}_{{title:6}}');
@@ -180,13 +184,8 @@ try {
     await clickTab('connection');
     const compact=await evaluate(`(()=>{const row=[...document.querySelectorAll('.setting-item')].find(x=>x.querySelector('.setting-item-name')?.textContent==='启动时同步'),a=row.querySelector('.setting-item-info').getBoundingClientRect(),b=row.querySelector('.setting-item-control').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<12,rowHeight:row.getBoundingClientRect().height};})()`);
     assert.ok(compact.sameRow);
-    await evaluate(`[...document.querySelectorAll('.flomo-support button')].find(x=>x.textContent==='查看收款码').click()`);
-    await send('Emulation.setDeviceMetricsOverride',{width:560,height:850,deviceScaleFactor:1,mobile:false});
-    const fundingGeometry=await evaluate(`(()=>{const grid=[...document.querySelectorAll('.flomo-funding-grid')].at(-1),cards=[...grid.children].map(x=>x.getBoundingClientRect()),content=grid.closest('.modal-content');return {stacked:cards[1].top>cards[0].bottom-2,client:content.clientWidth,scroll:content.scrollWidth};})()`);
-    assert.ok(fundingGeometry.stacked,JSON.stringify(fundingGeometry)); assert.ok(fundingGeometry.scroll<=fundingGeometry.client+2,JSON.stringify(fundingGeometry));
-    await screenshot('funding-light-narrow'); await escape();
-    const loadedVersion=await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].manifest.version`); assert.equal(loadedVersion,'0.3.8');
-    const result={obsidian:'1.13.7',version:loadedVersion,tabs:5,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,cascadingTagSelection:true,partialParentState:true,integratedScopeMappingTree:true,collapsedByDefault:true,searchExpandsBranches:true,compactMappingPriority:true,mappingPriorityReordered:true,excludeModePreservesMappings:true,missingLocalScan:true,selectedReimportRequiresAction:true,completeNoteEditable:true,wholeNotePreview:true,fundingModal:true,fundingImages:2,fundingNarrowStacked:true,compact,geometry,scopeGeometry,fundingGeometry};
+    const loadedVersion=await evaluate(`(globalThis.app||globalThis.opener.app).plugins.plugins['flomo-safe-sync'].manifest.version`); assert.equal(loadedVersion,'0.3.9');
+    const result={obsidian:'1.13.7',version:loadedVersion,tabs:6,draftsRetained:true,invalidTemplatesRejected:true,recommendedDefaultAdopted:true,legacySettingsPreserved:true,defaultPreservesCustom:true,pluginReloadPersisted:true,hierarchicalTags:true,cascadingTagSelection:true,partialParentState:true,integratedScopeMappingTree:true,collapsedByDefault:true,searchExpandsBranches:true,compactMappingPriority:true,mappingPriorityReordered:true,excludeModePreservesMappings:true,missingLocalScan:true,selectedReimportRequiresAction:true,completeNoteEditable:true,wholeNotePreview:true,fundingMoreTab:true,fundingImages:2,fundingNarrowStacked:true,compact,geometry,scopeGeometry,fundingGeometry};
     await fs.writeFile(`${OUTPUT}/ui-results.json`,JSON.stringify(result,null,2)); console.log(result);
     await send('Emulation.clearDeviceMetricsOverride');
 
