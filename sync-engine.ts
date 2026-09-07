@@ -1,6 +1,6 @@
 import { App, TFile, requestUrl } from 'obsidian';
 import { createHash } from 'crypto';
-import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractImageSources, extractManagedBodyEmbedTargets, extractTags,
+import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractClaimedFlomoSlugs, extractImageSources, extractManagedBodyEmbedTargets, extractTags,
   fileNameFromUrl, hasManagedMarkers, mergeManagedMemo, memoMatchesExcludedTags,
   normalizeVaultPath, renderFileName, sanitizePathSegment, tagsInScope, updateManagedStatus,
   validateFileNameTemplate, validateNoteTemplate, validateVaultRelativePath } from './sync-core';
@@ -9,12 +9,14 @@ import { FileState, FlomoSafeSyncSettings, SyncedMemoRecord } from './settings';
 export interface SyncResult {
   total: number; newCount: number; updatedCount: number; frozenCount: number; skippedCount: number;
   unmappedCount: number; deletedMarkedCount: number; archivedCount: number; pendingTrashCount: number;
-  conflictCount: number; assetErrorCount: number; errors: string[];
+  missingLocalCount: number; conflictCount: number; assetErrorCount: number; errors: string[];
 }
 export interface MissingLocalMemo {
   slug: string;
   fileName: string;
   filePaths: string[];
+  existingPaths?: string[];
+  blockedReason?: string;
 }
 export interface ReimportResult {
   reimportedCount: number;
@@ -183,12 +185,13 @@ async function readOwned(app: App, path: string, slug: string): Promise<string> 
   if (!hasManagedMarkers(text, slug)) throw new Error(`${path}：受管区或笔记身份冲突，已保留原文`);
   return text;
 }
+class MissingLocalFileError extends Error {}
 async function assertTrackedFilesPresent(app: App, slug: string, record: SyncedMemoRecord): Promise<void> {
   const paths = fileStates(record).map(file => file.path);
   if (!paths.length) throw new Error(`${slug}：同步记录没有本地文件路径，请在“更新与安全”中重新导入`);
   for (const path of paths) {
     if (!(await app.vault.adapter.exists(path))) {
-      throw new Error(`${path}：本地文件缺失，请在“更新与安全”中检查并重新导入`);
+      throw new MissingLocalFileError(`${path}：本地文件缺失，请在“更新与安全”中检查并重新导入`);
     }
   }
 }
@@ -378,11 +381,21 @@ function observedFileStates(record: SyncedMemoRecord): FileState[] {
   return record.fileStates || record.filePaths.map(path => ({ path, state: 'live' as const }));
 }
 
-async function findOwnedNoteElsewhere(app: App, slug: string): Promise<string | null> {
-  for (const file of app.vault.getMarkdownFiles()) {
-    if (hasManagedMarkers(await app.vault.adapter.read(file.path), slug)) return file.path;
+class MemoIdentityIndex {
+  private cache = new Map<string, { mtime: number; size: number; slugs: string[] }>();
+  constructor(private app: App) {}
+  async find(slugs: Set<string>): Promise<Map<string, string[]>> {
+    const found = new Map<string, string[]>();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const cached = this.cache.get(file.path);
+      const stat = file.stat;
+      const unchanged = stat && cached && stat.mtime === cached.mtime && stat.size === cached.size;
+      const claims = unchanged ? cached.slugs : extractClaimedFlomoSlugs(await this.app.vault.adapter.read(file.path));
+      if (stat) this.cache.set(file.path, { mtime: stat.mtime, size: stat.size, slugs: claims });
+      for (const slug of claims) if (slugs.has(slug)) found.set(slug, [...(found.get(slug) || []), file.path]);
+    }
+    return found;
   }
-  return null;
 }
 
 export async function scanMissingLocalMemos(app: App, settings: FlomoSafeSyncSettings): Promise<MissingLocalMemo[]> {
@@ -393,6 +406,16 @@ export async function scanMissingLocalMemos(app: App, settings: FlomoSafeSyncSet
       || !files.length || files.some(file => file.state !== 'live' || file.pending)) continue;
     const existence = await Promise.all(files.map(file => app.vault.adapter.exists(file.path)));
     if (existence.every(exists => !exists)) missing.push({ slug, fileName: record.fileName || slug, filePaths: files.map(file => file.path) });
+  }
+  if (missing.length) {
+    const identities = await new MemoIdentityIndex(app).find(new Set(missing.map(item => item.slug)));
+    for (const item of missing) {
+      const paths = identities.get(item.slug);
+      if (paths?.length) {
+        item.existingPaths = paths;
+        item.blockedReason = `已找到同编号笔记：${paths.join('；')}。请先核对路径和受管区标记，不能重复导入。`;
+      }
+    }
   }
   return missing.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN'));
 }
@@ -409,6 +432,7 @@ export async function reimportMissingMemos(
   validateSettings(settings);
   const result: ReimportResult = { reimportedCount: 0, assetErrorCount: 0, errors: [] };
   const remote = new Map(memos.map(memo => [memo.slug, memo]));
+  const identities = new MemoIdentityIndex(app);
   for (const slug of [...new Set(selectedSlugs)]) {
     try {
       const record = settings.syncedMemos[slug];
@@ -424,8 +448,10 @@ export async function reimportMissingMemos(
       }
       const existence = await Promise.all(files.map(file => app.vault.adapter.exists(file.path)));
       if (existence.some(Boolean)) throw new Error(`${record.fileName || slug}：至少一个已记录文件仍然存在，已停止以免生成重复笔记`);
-      const existingPath = await findOwnedNoteElsewhere(app, slug);
-      if (existingPath) throw new Error(`${record.fileName || slug}：Vault 中已存在同编号笔记 ${existingPath}，已停止以免生成重复笔记`);
+      // Recheck the current file list each time; cache only unchanged file contents.
+      // Missing/broken managed markers must never make an existing identity invisible.
+      const existingPaths = (await identities.find(new Set([slug]))).get(slug);
+      if (existingPaths?.length) throw new Error(`${record.fileName || slug}：Vault 中已存在同编号笔记 ${existingPaths.join('；')}，已停止以免生成重复笔记`);
       const created = await createMemo(app, settings, memo, token, excluded, record);
       settings.syncedMemos[slug] = created.record;
       await save();
@@ -441,8 +467,11 @@ export async function reimportMissingMemos(
 export async function syncToVault(app: App, settings: FlomoSafeSyncSettings, memos: FlomoMemo[], token: string, save: () => Promise<void>, internalMoves = new Set<string>()): Promise<SyncResult> {
   validateSettings(settings);
   const result: SyncResult = { total: memos.length, newCount: 0, updatedCount: 0, frozenCount: 0, skippedCount: 0, unmappedCount: 0,
-    deletedMarkedCount: 0, archivedCount: 0, pendingTrashCount: 0, conflictCount: 0, assetErrorCount: 0, errors: [] };
-  const fail = (error: unknown) => { result.conflictCount++; result.errors.push((error as Error).message); console.warn('[Flomo Safe Sync]', (error as Error).message); };
+    deletedMarkedCount: 0, archivedCount: 0, pendingTrashCount: 0, missingLocalCount: 0, conflictCount: 0, assetErrorCount: 0, errors: [] };
+  const fail = (error: unknown) => {
+    if (error instanceof MissingLocalFileError) result.missingLocalCount++; else result.conflictCount++;
+    result.errors.push((error as Error).message); console.warn('[Flomo Safe Sync]', (error as Error).message);
+  };
   const seen = new Set(memos.map(memo => memo.slug)); // Entire snapshot, BEFORE any scope filtering.
   for (const memo of memos) {
     const record = settings.syncedMemos[memo.slug];

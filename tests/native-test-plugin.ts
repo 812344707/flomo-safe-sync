@@ -70,4 +70,20 @@ export default class NativeTestPlugin extends FlomoSafeSyncPlugin {
     if (!content.includes('Recovered from Flomo')) throw new Error('Native missing note content was not recreated');
     return { oldPath, newPath, detected, reimported: result.reimportedCount };
   }
+  async qaRewrittenIdentity(): Promise<{ commentsRemoved: boolean; blocked: boolean; reimported: number }> {
+    this.assertFixture();
+    const suffix = Date.now();
+    const memo: FlomoMemo = { slug: `native-identity-${suffix}`, content: '<p>Existing memo</p>', tags: [{ name: '恢复' }], created_at: '2026-09-01 08:00:00', updated_at: '2026-09-01 08:00:00' };
+    const currentPath = `native-existing-${suffix}.md`;
+    const file = await this.app.vault.create(currentPath, buildNewMemoFile(memo, { syncedAt: new Date().toISOString() }));
+    await this.app.fileManager.processFrontMatter(file, frontmatter => { frontmatter.review_id = 'fixture-review'; });
+    const original = await this.app.vault.read(file);
+    Object.assign(this.settings, { rootFolder: 'NativeRecovered', scopeMode: 'exclude', scopeTags: [], localizeImages: false, syncedMemos: {
+      [memo.slug]: { fileName: 'native-existing', filePaths: [`missing-${suffix}.md`], updated_at: memo.updated_at, status: 'active', lastKnownTags: ['恢复'] },
+    } });
+    const detected = await scanMissingLocalMemos(this.app, this.settings);
+    const result = await reimportMissingMemos(this.app, this.settings, [memo], '', [memo.slug], () => this.saveSettings());
+    if (await this.app.vault.read(file) !== original) throw new Error('Identity check changed an existing note');
+    return { commentsRemoved: !original.includes('# flomo-sync:frontmatter:start'), blocked: Boolean(detected[0]?.blockedReason), reimported: result.reimportedCount };
+  }
 }

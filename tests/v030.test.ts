@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert';
 import FlomoSafeSyncPlugin from '../main';
 import { CURRENT_SETTINGS_VERSION, DEFAULT_FILE_NAME, LEGACY_DEFAULT_FILE_NAME, FlomoSafeSyncSettings, migrateSettings } from '../settings';
-import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateNoteTemplate, validateYamlTemplate } from '../sync-core';
+import { FlomoMemo, buildNewMemoFile, computeDesiredPaths, extractClaimedFlomoSlugs, extractYamlTags, renderYamlTemplate, tagsInScope, validateFileNameTemplate, validateNoteTemplate, validateYamlTemplate } from '../sync-core';
 import { App, MemoryAdapter, clearMockObservations, getMockState, parseYaml, resetObsidianMock, setLoadedData, setMockMemos, setMockResponses } from './obsidian-mock';
 
 const memo: FlomoMemo = { slug: 'memo-001', content: '<p>原始内容</p>', tags: [{ name: '写作' }], created_at: '2026-09-01 08:00:00', updated_at: '2026-09-01 08:00:00' };
@@ -155,11 +155,12 @@ for (const mode of ['body', 'properties', 'new-only'] as const) test(`${mode} fo
 test('new-only still imports complete first notes', async () => { const h = await harness({ updateMode: 'new-only' }, false); await sync(h, [memo]); assert.match(h.adapter.files.get(record(h).filePaths[0])!, /原始内容/); });
 test('a deleted local note is reported even when the remote timestamp has not changed', async () => {
   const h = await harness(); h.adapter.files.delete(path); await sync(h, [memo]);
-  assert.equal(h.plugin.lastResult?.conflictCount, 1);
+  assert.equal(h.plugin.lastResult?.missingLocalCount, 1); assert.equal(h.plugin.lastResult?.conflictCount, 0);
   assert.match(h.plugin.lastErrors[0], /本地文件缺失.*检查并重新导入/);
+  assert.ok(getMockState().notices.some(message => /本地文件缺失 1/.test(message) && /立即同步不会自动重建/.test(message)));
   assert.deepEqual(await h.plugin.findMissingLocalMemos(), [{ slug: memo.slug, fileName: 'note', filePaths: [path] }]);
   const frozen = await harness({ excludedTags: ['写作'], excludedPolicy: 'freeze' }); frozen.adapter.files.delete(path); await sync(frozen, [memo]);
-  assert.equal(frozen.plugin.lastResult?.conflictCount, 1); assert.equal(frozen.plugin.lastResult?.frozenCount, 0);
+  assert.equal(frozen.plugin.lastResult?.missingLocalCount, 1); assert.equal(frozen.plugin.lastResult?.conflictCount, 0); assert.equal(frozen.plugin.lastResult?.frozenCount, 0);
 });
 test('an explicitly selected missing note reimports into the current folder and retains its asset history', async () => {
   const h = await harness({ rootFolder: 'Correct', localizeImages: true });
@@ -187,6 +188,62 @@ test('missing-note reimport refuses to duplicate a restored file or bypass the c
   assert.deepEqual(await outOfScope.plugin.findMissingLocalMemos(), []);
   result = await outOfScope.plugin.reimportMissingLocalMemos([memo.slug]);
   assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /不在同步范围内/); assert.equal(outOfScope.adapter.writes.length, 0);
+});
+test('same-slug notes without YAML comment markers are blocked in both recovery preview and execution', async () => {
+  const h = await harness(); h.adapter.files.delete(path);
+  const rewritten = originalNote.replace(/^# flomo-sync:frontmatter:(?:start|end)\n/gm, '').replace('tags:\n', 'review_id: existing-review\ntags:\n');
+  h.adapter.files.set('Correct/existing.md', rewritten);
+  const before = clone(record(h));
+  const candidates = await h.plugin.findMissingLocalMemos();
+  assert.equal(candidates.length, 1); assert.deepEqual(candidates[0].existingPaths, ['Correct/existing.md']);
+  assert.match(candidates[0].blockedReason!, /同编号.*不能重复导入/);
+  setMockMemos([memo]); const result = await h.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /同编号/);
+  assert.equal(h.adapter.writes.length, 0); assert.deepEqual(record(h), before);
+  assert.equal(h.adapter.files.get('Correct/existing.md'), rewritten);
+});
+test('identity claims in malformed YAML prevent duplicate recovery without authorizing a write', async () => {
+  for (const frontmatter of [
+    'flomo_slug: "memo-001"\ninvalid: [',
+    'flomo_slug: other\nflomo_slug: memo-001',
+    '"flomo_slug": memo-001\ninvalid: [',
+  ]) {
+    const h = await harness(); h.adapter.files.delete(path);
+    const content = `---\n${frontmatter}\n---\n手工正文`;
+    h.adapter.files.set('Elsewhere/broken.md', content);
+    assert.ok((await h.plugin.findMissingLocalMemos())[0].blockedReason);
+    setMockMemos([memo]); const result = await h.plugin.reimportMissingLocalMemos([memo.slug]);
+    assert.equal(result.reimportedCount, 0); assert.equal(h.adapter.writes.length, 0);
+    assert.equal(h.adapter.files.get('Elsewhere/broken.md'), content);
+  }
+  assert.deepEqual(extractClaimedFlomoSlugs('---\nflomo_slug: |\n  memo-001\n---\n'), ['memo-001']);
+  assert.deepEqual(extractClaimedFlomoSlugs('---\nflomo_slug: memo-001\n'), ['memo-001']);
+  assert.deepEqual(extractClaimedFlomoSlugs('---\ntitle: example\n---\nflomo_slug: memo-001'), []);
+});
+test('a same-slug note appearing after recovery preview blocks execution', async () => {
+  const h = await harness(); h.adapter.files.delete(path);
+  assert.equal((await h.plugin.findMissingLocalMemos())[0].blockedReason, undefined);
+  h.adapter.files.set('Restored/note.md', originalNote.replace(/^# flomo-sync:frontmatter:(?:start|end)\n/gm, ''));
+  setMockMemos([memo]); const result = await h.plugin.reimportMissingLocalMemos([memo.slug]);
+  assert.equal(result.reimportedCount, 0); assert.match(result.errors[0], /同编号/); assert.equal(h.adapter.writes.length, 0);
+});
+test('bulk missing-file recovery separates excluded memos and existing identities', async () => {
+  const h = await harness({ scopeMode: 'exclude', scopeTags: ['排除'] }, false);
+  const memos = Array.from({ length: 180 }, (_, i) => ({ ...memo, slug: `bulk-${i}`, tags: [{ name: i < 50 ? '排除' : '写作' }] }));
+  for (const item of memos) h.plugin.settings.syncedMemos[item.slug] = { fileName: item.slug, filePaths: [`Old/${item.slug}.md`], status: 'active',
+    updated_at: item.updated_at, bodyUpdatedAt: item.updated_at, propertiesUpdatedAt: item.updated_at, lastKnownTags: item.tags.map(tag => tag.name) };
+  for (const item of memos.slice(50, 52)) h.adapter.files.set(`Moved/${item.slug}.md`, buildNewMemoFile(item, { syncedAt: '2026-09-01T00:00:00Z' })
+    .replace(/^# flomo-sync:frontmatter:(?:start|end)\n/gm, ''));
+  await sync(h, memos);
+  assert.equal(h.plugin.lastResult?.unmappedCount, 50); assert.equal(h.plugin.lastResult?.missingLocalCount, 130);
+  assert.equal(h.plugin.lastResult?.conflictCount, 0); assert.equal(h.adapter.writes.length, 0);
+  const candidates = await h.plugin.findMissingLocalMemos();
+  assert.equal(candidates.filter(item => !item.blockedReason).length, 128); assert.equal(candidates.filter(item => item.blockedReason).length, 2);
+  const result = await h.plugin.reimportMissingLocalMemos(candidates.filter(item => !item.blockedReason).map(item => item.slug));
+  assert.equal(result.reimportedCount, 128); assert.deepEqual(result.errors, []);
+  assert.equal(h.adapter.writes.length, 128); assert.equal((await h.plugin.findMissingLocalMemos()).length, 2);
+  await sync(h, memos); assert.equal(h.plugin.lastResult?.missingLocalCount, 2); assert.equal(h.plugin.lastResult?.newCount, 0);
+  assert.equal(h.adapter.writes.length, 128);
 });
 test('a conflicting destination prevents attachment downloads and version advancement', async () => {
   const h = await harness({ localizeImages: true }); h.adapter.files.set(path, originalNote.replace('memo-001', 'someone-else'));

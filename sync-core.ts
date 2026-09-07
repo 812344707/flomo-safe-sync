@@ -570,6 +570,30 @@ export function extractYamlTags(content: string, fieldName = 'tags'): string[] {
   return frontmatter ? extractYamlTagsFromYaml(frontmatter.yaml, fieldName) : [];
 }
 
+/** Identity claims block duplicate imports; they never authorize a managed write. */
+export function extractClaimedFlomoSlugs(content: string): string[] {
+  const yaml = splitFrontmatter(content)?.yaml
+    ?? content.match(/^\uFEFF?---\r?\n([\s\S]*?)(?:\r?\n(?:---|\.\.\.)(?:\r?\n|$)|$)/)?.[1];
+  if (yaml === undefined) return [];
+  const slugs = new Set<string>();
+  const readClaim = (source: string): void => {
+    try {
+      const parsed = parseYaml(source);
+      const value = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.flomo_slug : undefined;
+      if (typeof value === 'string' || typeof value === 'number') {
+        const slug = String(value).trim();
+        if (/^[A-Za-z0-9_-]+$/.test(slug)) slugs.add(slug);
+      }
+    } catch (_error) { /* A malformed document may still contain an identity claim. */ }
+  };
+  readClaim(yaml);
+  // Duplicate fields or unrelated broken YAML must not hide a claimed identity.
+  for (const line of yaml.split(/\r?\n/)) {
+    if (/^(?:flomo_slug|"flomo_slug"|'flomo_slug')\s*:/.test(line)) readClaim(line);
+  }
+  return [...slugs];
+}
+
 function removeYamlField(lines: string[], fieldName: string): string[] {
   const fieldPattern = new RegExp(`^${fieldName}\\s*:(.*)$`, 'i');
   const result = [...lines];

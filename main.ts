@@ -84,8 +84,9 @@ export default class FlomoSafeSyncPlugin extends Plugin {
       await this.saveSettings();
       const counts: Array<[string, number]> = [['新增', result.newCount], ['更新', result.updatedCount], ['冻结', result.frozenCount],
         ['排除', result.skippedCount], ['范围外', result.unmappedCount], ['标记删除', result.deletedMarkedCount],
-        ['归档', result.archivedCount], ['待移入回收站', result.pendingTrashCount], ['冲突', result.conflictCount], ['附件失败', result.assetErrorCount]];
-      new Notice(`Flomo 安全同步完成：${counts.filter(([, n]) => n).map(([label, n]) => `${label} ${n}`).join('，') || '没有变化'}（共 ${result.total} 条）`);
+        ['归档', result.archivedCount], ['待移入回收站', result.pendingTrashCount], ['本地文件缺失', result.missingLocalCount], ['冲突', result.conflictCount], ['附件失败', result.assetErrorCount]];
+      const recovery = result.missingLocalCount ? '。请到“更新与安全 → 检查缺失文件”处理，立即同步不会自动重建。' : '';
+      new Notice(`Flomo 安全同步完成：${counts.filter(([, n]) => n).map(([label, n]) => `${label} ${n}`).join('，') || '没有变化'}（共 ${result.total} 条）${recovery}`);
     } catch (error) {
       this.lastErrors = [(error as Error).message];
       new Notice(`Flomo 安全同步失败：${(error as Error).message}`);
