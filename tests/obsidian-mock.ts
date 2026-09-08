@@ -77,6 +77,10 @@ export class MemoryAdapter {
     return content;
   }
 
+  async readBinary(path: string): Promise<ArrayBuffer> {
+    return new TextEncoder().encode(await this.read(path)).buffer;
+  }
+
   async write(path: string, content: string): Promise<void> {
     if (path === this.failWritePath) throw new Error('Injected write failure');
     this.writes.push({ path, content });
@@ -104,6 +108,7 @@ export class App {
       getAllLoadedFiles: () => [...[...adapter.files.keys()].map(path => new TFile(path)), ...[...adapter.directories].map(path => new TFolder(path))],
       create: async (path: string, content: string) => { if (await adapter.exists(path)) throw new Error('Refusing to overwrite create target'); await adapter.write(path, content); return new TFile(path); },
       process: async (file: TFile, fn: (text: string) => string) => { const content = fn(await adapter.read(file.path)); await adapter.write(file.path, content); return content; },
+      rename: async (file: TFile, path: string) => this.fileManager.renameFile(file, path),
       trash: async (file: TFile, system: boolean) => {
         if (system) throw new Error('Tests require Obsidian local trash');
         if (file.path === adapter.failTrashPath) throw new Error('Injected trash failure');
@@ -136,6 +141,7 @@ export class Notice {
   constructor(message: string) {
     state.notices.push(message);
   }
+  hide(): void {}
 }
 
 export const Platform = { isDesktop: false, isMobile: false };

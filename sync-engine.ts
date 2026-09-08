@@ -39,7 +39,7 @@ async function ensureDir(app: App, dirPath: string): Promise<void> {
   }
 }
 
-async function ensureParentDir(app: App, filePath: string): Promise<void> {
+export async function ensureParentDir(app: App, filePath: string): Promise<void> {
   const slash = filePath.lastIndexOf('/');
   if (slash > 0) await ensureDir(app, filePath.slice(0, slash));
 }
@@ -179,7 +179,7 @@ function fileStates(record: SyncedMemoRecord): FileState[] {
 function refreshPaths(record: SyncedMemoRecord): void {
   record.filePaths = fileStates(record).map(file => file.path);
 }
-async function readOwned(app: App, path: string, slug: string): Promise<string> {
+export async function readOwned(app: App, path: string, slug: string): Promise<string> {
   if (!(await app.vault.adapter.exists(path))) throw new Error(`${path}：文件缺失，请先恢复文件后重试`);
   const text = await app.vault.adapter.read(path);
   if (!hasManagedMarkers(text, slug)) throw new Error(`${path}：受管区或笔记身份冲突，已保留原文`);
@@ -381,7 +381,7 @@ function observedFileStates(record: SyncedMemoRecord): FileState[] {
   return record.fileStates || record.filePaths.map(path => ({ path, state: 'live' as const }));
 }
 
-class MemoIdentityIndex {
+export class MemoIdentityIndex {
   private cache = new Map<string, { mtime: number; size: number; slugs: string[] }>();
   constructor(private app: App) {}
   async find(slugs: Set<string>): Promise<Map<string, string[]>> {

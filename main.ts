@@ -4,6 +4,7 @@ import { fetchAllMemos } from './flomo-api';
 import { executeTrash, MissingLocalMemo, ReimportResult, reimportMissingMemos, scanMissingLocalMemos, syncToVault, SyncResult } from './sync-engine';
 import { FlomoSafeSyncSettings, migrateSettings } from './settings';
 import { FlomoSafeSyncSettingTab } from './settings-tab';
+import { FolderMigrationResult, FolderSettings, folderSettings, migrateFolders, validateFolderMigrationSettings } from './folder-migration';
 
 interface ElectronWebContents {
   on(event: string, listener: (...args: unknown[]) => void): void;
@@ -35,6 +36,8 @@ export default class FlomoSafeSyncPlugin extends Plugin {
   lastErrors: string[] = [];
   readonly internalMoves = new Set<string>();
   private saveQueue: Promise<void> = Promise.resolve();
+  private savedFolders: FolderSettings;
+  private migrationNotice: Notice | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -42,12 +45,15 @@ export default class FlomoSafeSyncPlugin extends Plugin {
     this.addCommand({ id: 'sync-now', name: '立即安全同步', callback: () => { void this.runSync(); } });
     this.addSettingTab(new FlomoSafeSyncSettingTab(this.app, this, autoLoginFlomo));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void this.handleVaultRename(oldPath, file.path); }));
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.pendingFolderMigration) void this.relocateExistingFiles(false).catch(() => {});
+    });
     if (this.settings.autoSyncOnStartup && this.settings.bearerToken) {
       activeWindow.setTimeout(() => { void this.runSync(); }, 3000);
     }
     if (this.settings.autoSyncIntervalMinutes > 0 && this.settings.bearerToken) this.startIntervalSync();
   }
-  onunload(): void { this.stopIntervalSync(); }
+  onunload(): void { this.stopIntervalSync(); this.migrationNotice?.hide(); }
   startIntervalSync(): void {
     this.stopIntervalSync();
     const milliseconds = this.settings.autoSyncIntervalMinutes * 60000;
@@ -72,6 +78,10 @@ export default class FlomoSafeSyncPlugin extends Plugin {
     this.syncRunning = true;
     this.lastErrors = [];
     try {
+      if (this.settings.pendingFolderMigration) {
+        const migration = await this.performFolderMigration();
+        if (migration.errors.length) throw new Error(`目录迁移尚未完成：${migration.errors.join('；')}`);
+      }
       new Notice('Flomo 安全同步：正在读取…');
       const token = this.token();
       const settings = this.captureSettings();
@@ -137,7 +147,65 @@ export default class FlomoSafeSyncPlugin extends Plugin {
     await this.saveSettings();
     return this.settings.availableFlomoTags.length;
   }
-  async loadSettings(): Promise<void> { this.settings = migrateSettings(await this.loadData() || {}); }
+  async loadSettings(): Promise<void> {
+    this.settings = migrateSettings(await this.loadData() || {});
+    this.savedFolders = folderSettings(this.settings);
+  }
+  /** UI commits directory edits once, then migrates while holding the sync lock. */
+  async saveSettingsAndMigrate(): Promise<void> {
+    const previous = this.savedFolders;
+    const next = folderSettings(this.settings);
+    if (JSON.stringify(previous) === JSON.stringify(next)) { await this.saveSettings(); return; }
+    if (this.syncRunning) {
+      Object.assign(this.settings, folderSettings({ ...this.settings, ...previous }));
+      throw new Error('正在同步或移动文件，请完成后再修改目录。');
+    }
+    this.syncRunning = true;
+    const oldJob = this.settings.pendingFolderMigration;
+    let committed = false;
+    try {
+      // A nested attachment directory follows the root; an independent directory stays explicit.
+      if (next.rootFolder !== previous.rootFolder && next.imageFolder === previous.imageFolder && next.imageFolder.startsWith(`${previous.rootFolder}/`)) {
+        this.settings.imageFolder = `${next.rootFolder}${next.imageFolder.slice(previous.rootFolder.length)}`;
+      }
+      validateFolderMigrationSettings(this.settings);
+      this.settings.pendingFolderMigration = {
+        ...oldJob,
+        notes: Boolean(oldJob?.notes || next.rootFolder !== previous.rootFolder || JSON.stringify(next.tagFolderMappings) !== JSON.stringify(previous.tagFolderMappings)),
+        assets: Boolean(oldJob?.assets || this.settings.imageFolder !== previous.imageFolder),
+      };
+      await this.saveSettings();
+      committed = true;
+      this.savedFolders = folderSettings(this.settings);
+      await this.performFolderMigration();
+    } catch (error) {
+      if (!committed) { Object.assign(this.settings, previous); this.settings.pendingFolderMigration = oldJob; }
+      throw error;
+    } finally { this.syncRunning = false; }
+  }
+  async relocateExistingFiles(includeAll = true): Promise<FolderMigrationResult> {
+    if (this.syncRunning) throw new Error('正在同步或移动文件，请稍候再试。');
+    this.syncRunning = true;
+    try {
+      if (includeAll) this.settings.pendingFolderMigration = { ...this.settings.pendingFolderMigration, notes: true, assets: true };
+      await this.saveSettings();
+      return await this.performFolderMigration();
+    } catch (error) {
+      this.lastErrors = [(error as Error).message];
+      new Notice(`目录迁移未完成：${(error as Error).message}`);
+      throw error;
+    } finally { this.syncRunning = false; }
+  }
+  private async performFolderMigration(): Promise<FolderMigrationResult> {
+    this.migrationNotice?.hide();
+    this.migrationNotice = new Notice('正在按目录设置移动已有笔记和附件…', 0);
+    let result: FolderMigrationResult;
+    try { result = await migrateFolders(this.app, this.settings, () => this.saveSettings(), this.internalMoves); }
+    finally { this.migrationNotice.hide(); }
+    this.lastErrors = result.errors;
+    this.migrationNotice = new Notice(`目录整理：已移动笔记 ${result.notes} 篇、附件 ${result.assets} 个${result.errors.length ? `；未完成 ${result.errors.length} 项，请在“连接与同步”查看原因，处理后可重试。` : '。'}`);
+    return result;
+  }
   async saveSettings(): Promise<void> {
     const snapshot = JSON.parse(JSON.stringify(this.settings));
     const saved = this.saveQueue.catch(() => {}).then(() => this.saveData(snapshot));

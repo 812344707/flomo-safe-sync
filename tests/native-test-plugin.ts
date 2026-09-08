@@ -3,11 +3,34 @@ import { TFile } from 'obsidian';
 import FlomoSafeSyncPlugin from '../main';
 import { buildNewMemoFile, FlomoMemo } from '../sync-core';
 import { executeTrash, reimportMissingMemos, scanMissingLocalMemos, syncToVault } from '../sync-engine';
+import { ensureParentDir } from '../sync-engine';
+import { migrateSettings } from '../settings';
 
 const QA_VAULT = '/private/tmp/flomo-safe-sync-qa-v030/vault';
 export default class NativeTestPlugin extends FlomoSafeSyncPlugin {
   private assertFixture(): void {
     if ((this.app.vault.adapter as unknown as { basePath: string }).basePath !== QA_VAULT) throw new Error('Native tests require the isolated QA vault');
+  }
+  async qaFolderFixture() {
+    this.assertFixture();
+    const prefix = `FolderQA-${Date.now()}`;
+    const slug = `folder-${Date.now()}`;
+    const note = `${prefix}/Old/手写笔记.md`;
+    const asset = `${prefix}/Old/_attachments/flomo/${slug}/123456789abc-picture.png`;
+    const source = 'https://img.example/folder-fixture.png';
+    const memo: FlomoMemo = { slug, content: `<p>目录迁移样例</p><img src="${source}">`, tags: [{ name: '写作' }], created_at: '2026-09-01 08:00:00', updated_at: '2026-09-01 08:00:00' };
+    await ensureParentDir(this.app, asset);
+    await this.app.vault.createBinary(asset, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64'));
+    const original = buildNewMemoFile(memo, { syncedAt: '2026-09-01T00:00:00Z', imageMap: { [source]: asset } })
+      + `\n## 手写保留\n不能丢失的手写内容。\n![相对图片](_attachments/flomo/${slug}/123456789abc-picture.png)\n`;
+    await this.app.vault.create(note, original);
+    return { prefix, slug, note, asset, source, original, memo, settings: migrateSettings({
+      rootFolder: `${prefix}/Old`, imageFolder: `${prefix}/Old/_attachments/flomo`, bearerToken: '', autoSyncOnStartup: false, autoSyncIntervalMinutes: 0,
+      scopeMode: 'exclude', scopeTags: [], availableFlomoTags: ['写作'], localizeImages: true,
+      syncedMemos: { [slug]: { fileName: '手写笔记', filePaths: [note], fileStates: [{ path: note, state: 'live' }], updated_at: memo.updated_at, bodyUpdatedAt: memo.updated_at,
+        propertiesUpdatedAt: memo.updated_at, status: 'active', lastKnownTags: ['写作'], lastAppliedFlomoTags: ['写作'], tagsMerged: true,
+        assetFolder: `${prefix}/Old/_attachments/flomo/${slug}`, assetMap: { [source]: asset } } },
+    }) };
   }
   async qaPrepare(): Promise<FlomoMemo> {
     this.assertFixture();

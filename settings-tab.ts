@@ -71,8 +71,12 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     try { await work(); } catch (error) { new Notice((error as Error).message); }
     finally { this.busy = false; this.display(); }
   }
-  private persist(): Promise<void> {
-    return this.plugin.saveSettings().catch(error => { new Notice(`设置保存失败：${error.message}`); throw error; });
+  private async persist(): Promise<void> {
+    const panel = this.containerEl.querySelector<HTMLFieldSetElement>('.flomo-panel');
+    if (panel) panel.disabled = true;
+    try { await this.plugin.saveSettingsAndMigrate(); }
+    catch (error) { new Notice(`设置保存失败：${(error as Error).message}`); this.display(); throw error; }
+    finally { if (panel) panel.disabled = this.busy || this.plugin.syncRunning; }
   }
   private folders(): string[] {
     return this.app.vault.getAllLoadedFiles().filter((file): file is TFolder => file instanceof TFolder && !!file.path).map(file => file.path).sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -84,15 +88,24 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     for (const value of [...new Set(values)]) list.createEl('option', { attr: { value } });
   }
   private pathSetting(parent: HTMLElement, name: string, key: 'rootFolder' | 'imageFolder' | 'archiveFolder', description: string): void {
-    const setting = new Setting(parent).setName(name).setDesc(description);
+    const help = key === 'archiveFolder' ? description : `${description} 输入完成后按 Enter 或离开输入框，保存并自动迁移。`;
+    const setting = new Setting(parent).setName(name).setDesc(help);
     setting.addText(text => {
       text.inputEl.addClass('flomo-wide'); text.inputEl.setAttribute('aria-label', name);
       this.suggestions(setting.settingEl, text.inputEl, this.folders());
-      text.setValue(this.plugin.settings[key]).onChange(async value => {
+      text.setValue(this.plugin.settings[key]);
+      text.inputEl.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); text.inputEl.blur(); } });
+      text.inputEl.addEventListener('change', async () => {
+        const value = text.inputEl.value;
         const error = validateVaultRelativePath(value);
         if (error) { setting.setDesc(`未保存：${error}`); return; }
         this.plugin.settings[key] = normalizeVaultPath(value);
-        await this.persist(); setting.setDesc(`已保存。${description}`);
+        try {
+          await this.persist();
+          const imageInput = this.containerEl.querySelector<HTMLInputElement>('[aria-label="图片保存目录"]');
+          if (imageInput) imageInput.value = this.plugin.settings.imageFolder;
+          setting.setDesc(this.plugin.settings.pendingFolderMigration ? '设置已保存；部分文件未迁移，请在“连接与同步”查看原因。' : `已保存。${help}`);
+        } catch { /* persist already displayed the error and restored the saved value. */ }
       });
     });
   }
@@ -344,7 +357,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     details.open = this.scopeAdvancedOpen;
     details.addEventListener('toggle', () => { this.scopeAdvancedOpen = details.open; });
     details.createEl('summary', { text: `高级设置 · 映射优先级（${mappings.length}）` });
-    details.createEl('p', { cls: 'flomo-muted', text: '一条 memo 同时命中多个专属目录时，使用这里最靠前的映射。调整顺序只影响后续新导入笔记。' });
+    details.createEl('p', { cls: 'flomo-muted', text: '一条 memo 同时命中多个专属目录时，使用这里最靠前的映射。调整顺序后自动移动已有笔记。' });
     const list = details.createDiv({ cls: 'flomo-priority-list' });
     mappings.forEach((mapping, index) => {
       const tag = normalizeTag(mapping.tag);
@@ -478,7 +491,9 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     this.renderMappingPriority(parent);
     parent.createEl('h3', { text: '图片与附件' });
     new Setting(parent).setName('图片本地化').setDesc('识别图床插件已替换的远程图片链接并记住映射，后续同步不再重新下载；下载失败时保留 Flomo 原链接。').addToggle(toggle => toggle.setValue(this.plugin.settings.localizeImages).onChange(async value => { this.plugin.settings.localizeImages = value; await this.persist(); }));
-    this.pathSetting(parent, '图片保存目录', 'imageFolder', '目录下按 memo 编号分文件夹；只影响新导入 memo，已有图片沿用原目录。');
+    this.pathSetting(parent, '图片保存目录', 'imageFolder', '目录下按 memo 编号分文件夹；修改后移动已记录的本地图片和附件，并更新链接。独立设置的图片目录不会跟随笔记目录改变。');
+    new Setting(parent).setName('整理已有文件').setDesc('按当前目录设置移动范围内的已有笔记与附件，保留文件名、手写内容及图床链接。同名文件自动避让；已删除的文件请到“更新与安全”检查。')
+      .addButton(button => button.setButtonText(this.plugin.settings.pendingFolderMigration ? '重试未完成的迁移' : '按当前目录整理').onClick(() => this.action(() => this.plugin.relocateExistingFiles())));
   }
   private renderWholeNotePreview(parent: HTMLElement, content: string): void {
     parent.empty();
@@ -571,7 +586,7 @@ export class FlomoSafeSyncSettingTab extends PluginSettingTab {
     this.selectedMissingLocal = new Set([...this.selectedMissingLocal].filter(slug => available.has(slug)));
   }
   private missingLocalList(parent: HTMLElement): void {
-    new Setting(parent).setName('本地缺失笔记').setDesc('保存目录只影响新导入。已有笔记可直接在 Obsidian 内移动；如果已经删除，可检查后按当前目录设置重新导入。')
+    new Setting(parent).setName('本地缺失笔记').setDesc('修改保存目录会自动移动已有笔记和已记录的附件。如果文件已经删除，可检查后按当前目录设置重新导入。')
       .addButton(button => button.setButtonText('检查缺失文件').onClick(() => this.action(() => this.checkMissingLocal())));
     if (this.missingLocalMemos === null) return;
     const available = this.missingLocalMemos.filter(item => !item.blockedReason);

@@ -1,4 +1,5 @@
 import { DEFAULT_NOTE_TEMPLATE, ExcludedPolicy, TagFolderMapping, UpdateMode, createNoteTemplateFromYaml, normalizeTagList } from './sync-core';
+import type { FolderMigrationJob } from './folder-migration';
 
 /** Recommended Unicode-style date fields for new installations. */
 export const DEFAULT_FILE_NAME = '{{yyyy-MM-dd}}_{{HH-mm-ss}}_{{title:20}}_{{slug:8}}';
@@ -58,6 +59,8 @@ export interface FlomoSafeSyncSettings {
   autoSyncIntervalMinutes: number;
   lastSyncTime: number;
   syncedMemos: Record<string, SyncedMemoRecord>;
+  /** Persisted before any directory move, including an interrupted file operation. */
+  pendingFolderMigration?: FolderMigrationJob;
 }
 export const DEFAULT_SETTINGS: FlomoSafeSyncSettings = {
   settingsVersion: CURRENT_SETTINGS_VERSION, bearerToken: '', rootFolder: '00-Flomo收件箱',

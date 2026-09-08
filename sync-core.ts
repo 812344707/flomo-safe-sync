@@ -465,14 +465,20 @@ export function collectFlomoTags(memos: FlomoMemo[]): string[] {
 }
 
 export function computeDesiredPaths(memo: FlomoMemo, settings: PathSettings): string[] {
-  if (!tagsInScope(extractTags(memo), settings)) return [];
+  const folder = computeDesiredFolder(extractTags(memo), settings);
+  if (!folder) return [];
   const fileName = `${renderFileName(settings.fileNameTemplate, memo)}.md`;
+  return [joinVaultPath(folder, fileName)];
+}
+
+/** Share routing rules with directory migration without renaming existing files. */
+export function computeDesiredFolder(tags: string[], settings: PathSettings): string | null {
+  if (!tagsInScope(tags, settings)) return null;
   const scopeTags = new Set(normalizeTagList(settings.scopeTags ?? settings.tagFolderMappings.map(mapping => mapping.tag)));
   const eligibleMappings = settings.tagFolderMappings.filter(mapping =>
     settings.scopeMode === 'exclude' ? !scopeTags.has(normalizeTag(mapping.tag)) : scopeTags.has(normalizeTag(mapping.tag)));
-  const mapping = findTagFolderMapping(memo, eligibleMappings);
-  if (mapping) return [joinVaultPath(mapping.folder, fileName)];
-  return settings.rootFolder ? [joinVaultPath(normalizeVaultPath(settings.rootFolder), fileName)] : [];
+  const mapping = findTagFolderMappingForTags(tags, eligibleMappings);
+  return mapping?.folder || (settings.rootFolder ? normalizeVaultPath(settings.rootFolder) : null);
 }
 
 function yamlString(value: string): string {
