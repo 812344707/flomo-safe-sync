@@ -11,5 +11,7 @@
 
 目录整理无需登录或联网。YAML 注释被属性编辑器移除的文件，可在编号唯一、YAML 可解析时移动原文件；普通同步的受管区写入规则继续保留。
 
-本版本先提供本地测试包。验证依据和边界见 `VALIDATION-v0.3.10.md`。
-手动安装使用 `flomo-safe-sync-0.3.10.zip`，只覆盖 `main.js`、`manifest.json`、`styles.css` 后重载插件，保留原 `data.json`。
+本版本作为预发布测试版提供。31 项新增迁移测试、既有回归测试及 Obsidian 1.13.7 独立测试库验证通过，详情见[验证记录](https://github.com/812344707/flomo-safe-sync/blob/v0.3.10/docs/VALIDATION-v0.3.10.md)。
+
+BRAT 可选择 `v0.3.10` 更新，Release 已提供独立的 `main.js`、`manifest.json` 和 `styles.css`。
+手动安装下载 `flomo-safe-sync-0.3.10.zip`，只覆盖这三个文件后重载插件，保留原 `data.json`。
